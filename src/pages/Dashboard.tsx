@@ -509,7 +509,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
           </div>
           <div className="pt-2.5 flex items-center justify-between">
             <div>
-              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">BD Loss AMT</span>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">BD Lost AMT</span>
               <h3 className="text-base font-black text-rose-600 dark:text-rose-400 mt-0.5">
                 {formatCurrency(lossAmount)}
               </h3>

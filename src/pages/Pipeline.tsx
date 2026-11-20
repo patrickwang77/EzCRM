@@ -1462,7 +1462,7 @@ export const Pipeline: React.FC = () => {
 
                   <div className={`p-3.5 rounded-xl border ${theme.accentSoftBg} ${theme.accentBorder}`}>
                     <span className="block text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-                      Case Revenue per month (NTD)
+                      Monthly Deal Revenue (NTD)
                     </span>
                     <div className={`text-lg font-black font-mono mt-0.5 ${theme.accentText}`}>
                       NT$ {((parseInt(monthlyQuantity) || 0) * (parseFloat(unitPrice) || 0)).toLocaleString()}

@@ -389,7 +389,7 @@ export const GlobalQuickCreateModal: React.FC = () => {
                 />
               </div>
               <div>
-                <label className="block font-bold text-slate-600 dark:text-slate-300 mb-1.5">Case Revenue/mo</label>
+                <label className="block font-bold text-slate-600 dark:text-slate-300 mb-1.5">Monthly Deal Revenue (NTD)</label>
                 <div className={`px-3 py-2 rounded-xl border font-mono font-extrabold ${theme.accentSoftBg} ${theme.accentBorder} ${theme.accentText}`}>
                   NT$ {monthlyRev.toLocaleString()}
                 </div>
