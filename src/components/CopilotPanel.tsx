@@ -4,11 +4,12 @@ import { useLayout } from '../context/LayoutContext';
 import { db } from '../services/db';
 import type { Opportunity, Company, User, Stage, Activity, Contact, ActivityTypeConfig } from '../services/db';
 import { inferPreviewTags, getTagToneClass } from '../utils/aiTagPreview';
+import { getStageColor } from '../utils/stageColors';
 import { Sparkles, X, Building2, User as UserIcon, Plus, Phone, Mail, CheckCircle2, Circle } from 'lucide-react';
 
 export const CopilotPanel: React.FC<{ onGoToPipeline?: (companyId: string) => void }> = ({ onGoToPipeline }) => {
   const { currentUser } = useAuth();
-  const { copilotOppId, setCopilotOppId, setIsCopilotOpen, dataVersion, bumpDataVersion, theme } = useLayout();
+  const { variant, copilotOppId, setCopilotOppId, setIsCopilotOpen, dataVersion, bumpDataVersion, theme } = useLayout();
 
   const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
   const [companies, setCompanies] = useState<Company[]>([]);
@@ -134,9 +135,16 @@ export const CopilotPanel: React.FC<{ onGoToPipeline?: (companyId: string) => vo
                 <h4 className="text-sm font-extrabold text-slate-800 dark:text-white leading-snug">
                   {selectedOpp.title}
                 </h4>
-                <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold flex-shrink-0 ${theme.accentSoftBg} ${theme.accentText}`}>
-                  {stage?.name} · {selectedOpp.winProbability}%
-                </span>
+                {(() => {
+                  const stIdx = stages.findIndex(s => s.id === selectedOpp.stageId);
+                  const stToken = getStageColor(stIdx, stages.length, variant);
+                  return (
+                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[11px] font-bold flex-shrink-0 ${stToken.pillClass}`}>
+                      <span className={`w-1.5 h-1.5 rounded-full ${stToken.barBg}`} />
+                      {stage?.name} · {selectedOpp.winProbability}%
+                    </span>
+                  );
+                })()}
               </div>
               <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400">
                 <button

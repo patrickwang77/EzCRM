@@ -5,6 +5,7 @@ import { db } from '../services/db';
 import type { Company, Organization } from '../services/db';
 import { exportToCsv } from '../utils/exportCsv';
 import { inferPreviewTags } from '../utils/aiTagPreview';
+import { getStageColor } from '../utils/stageColors';
 import {
   DollarSign,
   Target,
@@ -214,36 +215,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
     const chartWidth = 500;
     const centerX = chartWidth / 2;
 
-    // Cohesive tonal progression per variant (no jarring rainbow drift!)
-    const PALETTES: Record<'A' | 'B' | 'C', [string, string][]> = {
-      A: [
-        ['#93c5fd', '#60a5fa'],
-        ['#60a5fa', '#3b82f6'],
-        ['#3b82f6', '#2563eb'],
-        ['#4f46e5', '#4338ca'],
-        ['#10b981', '#059669'],
-        ['#f43f5e', '#e11d48'],
-      ],
-      B: [
-        ['#5eead4', '#2dd4bf'],
-        ['#2dd4bf', '#14b8a6'],
-        ['#14b8a6', '#0d9488'],
-        ['#0284c7', '#0369a1'],
-        ['#10b981', '#059669'],
-        ['#f43f5e', '#e11d48'],
-      ],
-      C: [
-        ['#c4b5fd', '#a78bfa'],
-        ['#a78bfa', '#8b5cf6'],
-        ['#8b5cf6', '#7c3aed'],
-        ['#6366f1', '#4f46e5'],
-        ['#10b981', '#059669'],
-        ['#f43f5e', '#e11d48'],
-      ],
-    };
-
-    const COLORS = PALETTES[variant];
-
     const funnelBars = funnelData.map((d, i) => {
       const originalWidth =
         maxOriginalAmount > 0 ? (d.originalAmount / maxOriginalAmount) * (chartWidth * 0.85) : 0;
@@ -251,6 +222,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
         maxOriginalAmount > 0 ? (d.weightedAmount / maxOriginalAmount) * (chartWidth * 0.85) : 0;
       const countWidth = maxCount > 0 ? (d.count / maxCount) * (chartWidth * 0.85) : 0;
       const y = i * rowHeight + (rowHeight - barHeight) / 2;
+      const token = getStageColor(i, stageCount, variant);
 
       return {
         id: i,
@@ -262,7 +234,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
         originalWidth,
         weightedWidth,
         countWidth,
-        color: COLORS[i % COLORS.length],
+        color: token.hex,
       };
     });
 

@@ -15,6 +15,7 @@ import type {
 } from '../services/db';
 import { exportToCsv } from '../utils/exportCsv';
 import { inferPreviewTags, getTagToneClass } from '../utils/aiTagPreview';
+import { getStageColor } from '../utils/stageColors';
 import {
   Plus,
   Trash2,
@@ -499,15 +500,11 @@ export const Pipeline: React.FC = () => {
     el?.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
   };
 
-  // Stage dot & accent color palette
-  const STAGE_COLORS = [
-    { bar: 'bg-sky-500', dot: 'bg-sky-500 text-white', hex: '#0ea5e9' },
-    { bar: 'bg-blue-500', dot: 'bg-blue-500 text-white', hex: '#3b82f6' },
-    { bar: 'bg-indigo-500', dot: 'bg-indigo-500 text-white', hex: '#6366f1' },
-    { bar: 'bg-violet-500', dot: 'bg-violet-500 text-white', hex: '#8b5cf6' },
-    { bar: 'bg-emerald-500', dot: 'bg-emerald-500 text-white', hex: '#10b981' },
-    { bar: 'bg-rose-500', dot: 'bg-rose-500 text-white', hex: '#f43f5e' },
-  ];
+  // Helper: single-source-of-truth stage color synced across Funnel, Kanban, Table & Gantt
+  const getStageTokenById = (targetStageId: string) => {
+    const idx = stages.findIndex(s => s.id === targetStageId);
+    return getStageColor(idx, stages.length, variant);
+  };
 
   // =========================================================================
   // UPGRADED GANTT CHART WITH WEEK / MONTH / QUARTER ZOOM + TODAY LINE
@@ -685,9 +682,15 @@ export const Pipeline: React.FC = () => {
                         <span className="text-[10px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 px-1.5 py-0.5 rounded">
                           {pLine?.name || '未設產品線'}
                         </span>
-                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${theme.accentSoftBg} ${theme.accentText}`}>
-                          {currentStage?.name || '未知階段'}
-                        </span>
+                        {(() => {
+                          const stToken = getStageTokenById(opp.stageId);
+                          return (
+                            <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border ${stToken.pillClass}`}>
+                              <span className={`w-1.5 h-1.5 rounded-full ${stToken.barBg}`} />
+                              {currentStage?.name || '未知階段'}
+                            </span>
+                          );
+                        })()}
                       </div>
                     </div>
 
@@ -747,7 +750,7 @@ export const Pipeline: React.FC = () => {
                           const dateTs = new Date(dateStr).getTime();
                           if (dateTs < startTs || dateTs > endTs) return null;
                           const pct = ((dateTs - startTs) / totalDuration) * 100;
-                          const dotClass = STAGE_COLORS[stIdx % STAGE_COLORS.length].dot;
+                          const dotClass = getStageColor(stIdx, stages.length, variant).dotBg;
 
                           return (
                             <div
@@ -829,14 +832,15 @@ export const Pipeline: React.FC = () => {
                     {comp?.name || '未知客戶'}
                   </td>
                   <td className="py-3 px-4">
-                    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-bold">
-                      <span
-                        className={`w-2 h-2 rounded-full ${
-                          STAGE_COLORS[(stgIdx >= 0 ? stgIdx : 0) % STAGE_COLORS.length].bar
-                        }`}
-                      />
-                      {stg?.name || '未知'} ({opp.winProbability}%)
-                    </span>
+                    {(() => {
+                      const stToken = getStageColor(stgIdx, stages.length, variant);
+                      return (
+                        <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full border font-bold ${stToken.pillClass}`}>
+                          <span className={`w-2 h-2 rounded-full ${stToken.barBg}`} />
+                          {stg?.name || '未知'} ({opp.winProbability}%)
+                        </span>
+                      );
+                    })()}
                   </td>
                   <td className="py-3 px-4 text-slate-500 dark:text-slate-400">{pl?.name || '-'}</td>
                   <td className="py-3 px-4">
@@ -1089,19 +1093,20 @@ export const Pipeline: React.FC = () => {
               <span className="text-[11px] font-bold text-slate-400 flex-shrink-0 mr-1">
                 階段速覽：
               </span>
-              {visibleKanbanStages.map((st, idx) => {
+              {visibleKanbanStages.map(st => {
                 const stOpps = displayedOpportunities.filter(o => o.stageId === st.id);
                 const stSum = stOpps.reduce((sum, o) => sum + o.amount, 0);
+                const stToken = getStageTokenById(st.id);
                 return (
                   <button
                     key={st.id}
                     type="button"
                     onClick={() => scrollToStageColumn(st.id)}
-                    className="flex-shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-slate-400 dark:hover:border-slate-600 text-xs font-bold text-slate-700 dark:text-slate-200 transition-all"
+                    className={`flex-shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs font-bold transition-all hover:opacity-85 ${stToken.pillClass}`}
                   >
-                    <span className={`w-2 h-2 rounded-full ${STAGE_COLORS[idx % STAGE_COLORS.length].bar}`} />
+                    <span className={`w-2 h-2 rounded-full ${stToken.barBg}`} />
                     <span>{st.name}</span>
-                    <span className="text-[11px] px-1.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 font-mono">
+                    <span className="text-[11px] px-1.5 rounded-full bg-white/70 dark:bg-slate-950/50 font-mono">
                       {stOpps.length} · {stSum >= 10000 ? `${(stSum / 10000).toFixed(0)}萬` : stSum}
                     </span>
                   </button>
@@ -1134,11 +1139,11 @@ export const Pipeline: React.FC = () => {
             ref={kanbanScrollRef}
             className="flex items-start gap-3.5 overflow-x-auto pb-4 scroll-smooth"
           >
-            {visibleKanbanStages.map((stage, stageIdx) => {
+            {visibleKanbanStages.map(stage => {
               const stageOpps = displayedOpportunities.filter(o => o.stageId === stage.id);
               const totalAmount = stageOpps.reduce((sum, o) => sum + o.amount, 0);
               const isOver = dragOverStageId === stage.id;
-              const stageColor = STAGE_COLORS[stageIdx % STAGE_COLORS.length];
+              const stageColor = getStageTokenById(stage.id);
 
               return (
                 <div
@@ -1152,13 +1157,14 @@ export const Pipeline: React.FC = () => {
                   }`}
                 >
                   {/* Colored Top Accent Bar */}
-                  <div className={`h-1 rounded-full mb-2.5 ${stageColor.bar}`} />
+                  <div className={`h-1.5 rounded-full mb-2.5 ${stageColor.barBg}`} />
 
                   {/* Stage Header */}
                   <div className="flex items-center justify-between mb-1.5">
                     <div className="flex items-center gap-1.5 min-w-0">
-                      <span className="font-extrabold text-xs text-slate-800 dark:text-slate-100 truncate">
-                        {stage.name}
+                      <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-xs font-extrabold truncate ${stageColor.pillClass}`}>
+                        <span className={`w-2 h-2 rounded-full flex-shrink-0 ${stageColor.barBg}`} />
+                        <span className="truncate">{stage.name}</span>
                       </span>
                       <span className="text-[11px] font-bold px-1.5 py-0.5 rounded-md bg-white dark:bg-slate-800 text-slate-500 dark:text-slate-400">
                         {stageOpps.length}
