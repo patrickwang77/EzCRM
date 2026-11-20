@@ -57,6 +57,12 @@ export interface BudgetItemConfig {
   name: string;
 }
 
+export interface EntityTag {
+  label: string;
+  source: 'manual' | 'ai';
+  tone?: 'good' | 'warn' | 'risk' | 'info' | 'neutral';
+}
+
 export interface Opportunity {
   id: string;
   companyId: string;
@@ -73,6 +79,7 @@ export interface Opportunity {
   orgId: string | null;
   schedules: { [stageId: string]: string };
   budgets: { budgetItemId: string; amount: number }[];
+  tags?: EntityTag[]; // 預留給手動 / LLM 自動標籤
 }
 
 export interface Activity {
@@ -83,6 +90,7 @@ export interface Activity {
   description: string;
   dueDate: string; // 到期時間
   isCompleted: boolean;
+  tags?: EntityTag[]; // 預留給手動 / LLM 自動標籤
 }
 
 // 預設 Mock 數據

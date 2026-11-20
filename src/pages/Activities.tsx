@@ -1,7 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { useLayout } from '../context/LayoutContext';
 import { db } from '../services/db';
 import type { Company, Organization, Activity, Opportunity, User, ActivityTypeConfig, Contact } from '../services/db';
+import { exportToCsv } from '../utils/exportCsv';
+import { inferPreviewTags, getTagToneClass } from '../utils/aiTagPreview';
 import { 
   Plus, 
   Trash2, 
@@ -19,11 +22,13 @@ import {
   Coffee,
   MessageSquare,
   Coins,
-  Gift
+  Gift,
+  Download
 } from 'lucide-react';
 
 export const Activities: React.FC<{ setActiveTab?: (tab: string) => void }> = ({ setActiveTab }) => {
   const { currentUser } = useAuth();
+  const { theme, dataVersion } = useLayout();
   
   // Slicers State
   const [selectedOrgId, setSelectedOrgId] = useState<string>('');
@@ -123,7 +128,7 @@ export const Activities: React.FC<{ setActiveTab?: (tab: string) => void }> = ({
 
   useEffect(() => {
     loadData();
-  }, [currentUser, selectedOrgId, selectedCompanyId]);
+  }, [currentUser, selectedOrgId, selectedCompanyId, dataVersion]);
 
   // 打開新增/編輯 Modal
   const openModal = (act: Activity | null = null) => {
@@ -253,54 +258,81 @@ export const Activities: React.FC<{ setActiveTab?: (tab: string) => void }> = ({
     ));
   };
 
+  const handleExportActivities = () => {
+    const headers = ['活動類型', '狀態', '關聯商機', '負責業務', '執行/到期時間', '活動內容', 'AI關鍵字預覽'];
+    const rows = activities.map(a => {
+      const opp = opportunities.find(o => o.id === a.opportunityId);
+      const usr = users.find(u => u.id === a.userId);
+      const tags = inferPreviewTags([a.description], a.tags);
+      return [
+        a.type,
+        a.isCompleted ? '已完成' : '待處理',
+        opp?.title || '',
+        usr?.name || '',
+        a.dueDate,
+        a.description,
+        tags.map(t => `#${t.label}`).join(' '),
+      ];
+    });
+    exportToCsv(`CRM_任務活動歷程_${new Date().toISOString().slice(0, 10)}.csv`, headers, rows);
+  };
+
   return (
     <div className="space-y-6">
       
       {/* Slicers 篩選面板 */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-5 shadow-sm flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-xs flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h2 className="text-xl font-extrabold text-slate-800 dark:text-white">客戶互動與待辦任務 (Activities)</h2>
-          <p className="text-xs text-slate-400 mt-1">
-            追蹤與客戶的聯繫歷程。即將到期的任務將優先顯示於待辦清單中。
+          <h2 className="text-base font-extrabold text-slate-800 dark:text-white">客戶互動與待辦任務 (Activities)</h2>
+          <p className="text-xs text-slate-400 mt-0.5">
+            追蹤與客戶的聯繫歷程。即將到期的任務將優先顯示於待辦清單中，並自動預覽 AI 關鍵字標籤。
           </p>
         </div>
 
         {/* Slicer Dropdowns */}
-        <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
+        <div className="flex flex-wrap items-center gap-2.5 w-full sm:w-auto">
           
           {/* 組織 Slicer (限 ADMIN/BU head) */}
           {currentUser?.role !== 'AM' && (
-            <div className="flex items-center gap-2">
-              <FolderTree className="w-4 h-4 text-indigo-500" />
+            <div className="flex items-center gap-1.5">
+              <FolderTree className={`w-4 h-4 ${theme.accentText}`} />
               <select
                 value={selectedOrgId}
                 onChange={(e) => setSelectedOrgId(e.target.value)}
-                className="px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-semibold text-slate-700 dark:text-slate-200 focus:ring-1 focus:ring-sky-500"
+                className="px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-semibold text-slate-700 dark:text-slate-200"
               >
-                <option value="">(所有部門)</option>
+                <option value="" className="bg-white dark:bg-slate-950">(所有部門)</option>
                 {renderOrgOptions(null)}
               </select>
             </div>
           )}
 
           {/* 客戶 Slicer */}
-          <div className="flex items-center gap-2">
-            <Building2 className="w-4 h-4 text-sky-500" />
+          <div className="flex items-center gap-1.5">
+            <Building2 className={`w-4 h-4 ${theme.accentText}`} />
             <select
               value={selectedCompanyId}
               onChange={(e) => setSelectedCompanyId(e.target.value)}
-              className="px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-semibold text-slate-700 dark:text-slate-200 focus:ring-1 focus:ring-sky-500"
+              className="px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-semibold text-slate-700 dark:text-slate-200"
             >
-              <option value="">(所有客戶公司)</option>
+              <option value="" className="bg-white dark:bg-slate-950">(所有客戶公司)</option>
               {companies.map(c => (
-                <option key={c.id} value={c.id}>{c.name}</option>
+                <option key={c.id} value={c.id} className="bg-white dark:bg-slate-950">{c.name}</option>
               ))}
             </select>
           </div>
 
           <button
+            onClick={handleExportActivities}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-xs font-bold text-slate-700 dark:text-slate-200"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>匯出</span>
+          </button>
+
+          <button
             onClick={() => openModal(null)}
-            className="flex items-center justify-center gap-1.5 px-4 py-2 bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-700 hover:to-indigo-700 text-white font-bold rounded-xl shadow-md transition-all text-xs"
+            className={`flex items-center justify-center gap-1.5 px-3.5 py-1.5 font-bold rounded-xl transition-all text-xs ${theme.primaryBtn}`}
           >
             <Plus className="w-4 h-4" />
             <span>新增活動</span>
@@ -436,9 +468,26 @@ export const Activities: React.FC<{ setActiveTab?: (tab: string) => void }> = ({
                           )}
                         </div>
 
-                        <p className="text-sm font-semibold text-slate-850 dark:text-slate-200">
+                        <p className="text-sm font-semibold text-slate-800 dark:text-slate-200">
                           {act.description}
                         </p>
+
+                        {(() => {
+                          const tags = inferPreviewTags([act.description], act.tags);
+                          if (tags.length === 0) return null;
+                          return (
+                            <div className="flex flex-wrap gap-1.5 mt-2">
+                              {tags.map(t => (
+                                <span
+                                  key={t.label}
+                                  className={`px-1.5 py-0.5 rounded text-[10px] font-bold border ${getTagToneClass(t.tone)}`}
+                                >
+                                  ✦ #{t.label}
+                                </span>
+                              ))}
+                            </div>
+                          );
+                        })()}
 
                         <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 mt-3 text-[11px] text-slate-400">
                           <span className="flex items-center gap-1">

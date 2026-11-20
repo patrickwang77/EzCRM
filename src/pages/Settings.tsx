@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { useLayout } from '../context/LayoutContext';
 import { db } from '../services/db';
 import type { Stage, User, Organization, Company, Contact, ActivityTypeConfig, ProductLine, BudgetItemConfig } from '../services/db';
 import { 
@@ -22,6 +23,7 @@ import {
 
 export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'system' }) => {
   const { currentUser } = useAuth();
+  const { dataVersion } = useLayout();
   const [activeTab, setActiveTab] = useState<'stages' | 'org' | 'users' | 'clients' | 'actTypes' | 'prodLines' | 'budgetItems'>(
     mode === 'sales' ? 'clients' : 'stages'
   );
@@ -86,7 +88,7 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
 
   useEffect(() => {
     loadAllData();
-  }, []);
+  }, [dataVersion]);
 
   useEffect(() => {
     setActiveTab(mode === 'sales' ? 'clients' : 'stages');

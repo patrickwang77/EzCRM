@@ -1,8 +1,11 @@
 import { useState } from 'react';
 import { AuthProvider } from './context/AuthContext';
-import { SidebarLayout } from './components/SidebarLayout';
+import { LayoutProvider } from './context/LayoutContext';
+import { AppShell } from './components/AppShell';
+import { GlobalQuickCreateModal } from './components/GlobalQuickCreateModal';
 import { Dashboard } from './pages/Dashboard';
 import { Pipeline } from './pages/Pipeline';
+import { Accounts } from './pages/Accounts';
 import { Activities } from './pages/Activities';
 import { Settings } from './pages/Settings';
 
@@ -12,9 +15,11 @@ function AppContent() {
   const renderContent = () => {
     switch (activeTab) {
       case 'dashboard':
-        return <Dashboard />;
+        return <Dashboard setActiveTab={setActiveTab} />;
       case 'pipeline':
         return <Pipeline />;
+      case 'accounts':
+        return <Accounts setActiveTab={setActiveTab} />;
       case 'activities':
         return <Activities setActiveTab={setActiveTab} />;
       case 'systemSettings':
@@ -22,21 +27,24 @@ function AppContent() {
       case 'salesSettings':
         return <Settings key="sales" mode="sales" />;
       default:
-        return <Dashboard />;
+        return <Dashboard setActiveTab={setActiveTab} />;
     }
   };
 
   return (
-    <SidebarLayout activeTab={activeTab} setActiveTab={setActiveTab}>
+    <AppShell activeTab={activeTab} setActiveTab={setActiveTab}>
       {renderContent()}
-    </SidebarLayout>
+      <GlobalQuickCreateModal />
+    </AppShell>
   );
 }
 
 function App() {
   return (
     <AuthProvider>
-      <AppContent />
+      <LayoutProvider>
+        <AppContent />
+      </LayoutProvider>
     </AuthProvider>
   );
 }
