@@ -85,6 +85,8 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [variant, setVariantState] = useState<LayoutVariant>(() => {
     const saved = localStorage.getItem('crm_layout_variant');
     if (saved === 'A' || saved === 'B' || saved === 'C') return saved;
+    const envDefault = import.meta.env.VITE_DEFAULT_VARIANT;
+    if (envDefault === 'A' || envDefault === 'B' || envDefault === 'C') return envDefault;
     return 'A';
   });
 

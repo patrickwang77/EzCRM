@@ -351,11 +351,36 @@ const STORAGE_KEYS = {
   BUDGET_ITEMS: 'crm_budget_items',
 };
 
+const IS_CLEAN_START = import.meta.env.VITE_CLEAN_START === 'true';
+
+const CLEAN_START_ADMIN: User[] = [
+  { id: 'admin-init', name: '系統管理員 (Admin)', email: 'admin@crm.local', role: 'ADMIN', orgId: null },
+];
+
+const getCleanFallback = <T>(key: string, defaultValue: T): T => {
+  if (!IS_CLEAN_START) return defaultValue;
+  switch (key) {
+    case STORAGE_KEYS.USERS:
+      return CLEAN_START_ADMIN as unknown as T;
+    case STORAGE_KEYS.ORGANIZATIONS:
+    case STORAGE_KEYS.COMPANIES:
+    case STORAGE_KEYS.CONTACTS:
+    case STORAGE_KEYS.OPPORTUNITIES:
+    case STORAGE_KEYS.ACTIVITIES:
+    case STORAGE_KEYS.PRODUCT_LINES:
+    case STORAGE_KEYS.BUDGET_ITEMS:
+      return [] as unknown as T;
+    default:
+      return defaultValue;
+  }
+};
+
 const getFromStorage = <T>(key: string, defaultValue: T): T => {
   const data = localStorage.getItem(key);
   if (!data) {
-    localStorage.setItem(key, JSON.stringify(defaultValue));
-    return defaultValue;
+    const seed = getCleanFallback(key, defaultValue);
+    localStorage.setItem(key, JSON.stringify(seed));
+    return seed;
   }
   return JSON.parse(data);
 };

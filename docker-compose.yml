@@ -1,0 +1,12 @@
+services:
+  b2b-crm-clean-b:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VITE_CLEAN_START: "true"
+        VITE_DEFAULT_VARIANT: "B"
+    container_name: b2b-crm-clean-variant-b
+    ports:
+      - "8080:80"
+    restart: unless-stopped
