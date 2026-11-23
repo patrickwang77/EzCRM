@@ -1157,8 +1157,11 @@ export const db = {
     wonAmount: number;
     lostAmount: number;
     wonRate: number;
+    lostRate: number;
     closedWinRate: number;
     activityCompletionRate: number;
+    completedActivitiesCount: number;
+    totalActivitiesCount: number;
     taskCompletionRate: number;
     funnelConversion: number;
   }> => {
@@ -1199,8 +1202,9 @@ export const db = {
     const wonAmount = wonOpps.reduce((sum, o) => sum + o.amount, 0);
     const lostAmount = lostOpps.reduce((sum, o) => sum + o.amount, 0);
 
-    // BD Won % = BD Won count / total BD count
+    // BD Won % = BD Won count / total BD count; BD Lost % = BD Lost count / total BD count
     const wonRate = opps.length > 0 ? (wonOpps.length / opps.length) * 100 : 0;
+    const lostRate = opps.length > 0 ? (lostOpps.length / opps.length) * 100 : 0;
     const closedTotal = wonOpps.length + lostOpps.length;
     const closedWinRate = closedTotal > 0 ? (wonOpps.length / closedTotal) * 100 : 0;
 
@@ -1220,8 +1224,11 @@ export const db = {
       wonAmount,
       lostAmount,
       wonRate,
+      lostRate,
       closedWinRate,
       activityCompletionRate,
+      completedActivitiesCount: completedActs.length,
+      totalActivitiesCount: filteredActivities.length,
       taskCompletionRate: activityCompletionRate,
       funnelConversion: wonRate,
     };

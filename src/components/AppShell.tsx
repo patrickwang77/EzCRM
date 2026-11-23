@@ -138,16 +138,16 @@ export const AppShell: React.FC<AppShellProps> = ({ children, activeTab, setActi
 
   // Shared Role Switcher + Theme + Quick Create controls
   const renderRightUtilities = () => (
-    <div className="flex items-center gap-2">
+    <div className="flex items-center gap-2 flex-shrink-0">
       {renderVariantSwitcher()}
 
       {/* Global Quick Create */}
       <button
         onClick={() => openQuickCreate('opp')}
-        className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${theme.primaryBtn}`}
+        className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap flex-shrink-0 ${theme.primaryBtn}`}
         title="快速建立商機、活動或客戶 (Ctrl/⌘+K)"
       >
-        <Plus className="w-4 h-4" />
+        <Plus className="w-4 h-4 flex-shrink-0" />
         <span className="hidden sm:inline">快速建立</span>
       </button>
 
@@ -180,7 +180,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children, activeTab, setActi
       <div className="relative">
         <button
           onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-          className="flex items-center gap-2 px-3 py-1.5 bg-slate-100 hover:bg-slate-200/80 dark:bg-slate-800 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 rounded-xl transition-all text-xs font-semibold"
+          className="flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200/80 dark:bg-slate-800 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 rounded-xl transition-all text-xs font-semibold whitespace-nowrap flex-shrink-0"
         >
           <Shield className={`w-3.5 h-3.5 ${theme.accentText}`} />
           <span className="hidden lg:inline text-slate-600 dark:text-slate-300">
@@ -253,7 +253,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children, activeTab, setActi
                 </span>
               </div>
 
-              <nav className="hidden md:flex items-center gap-1 overflow-x-auto">
+              <nav className="hidden md:flex items-center gap-0.5 overflow-x-auto no-scrollbar">
                 {visibleMenuItems.map(item => {
                   const Icon = item.icon;
                   const isLocked = item.requiresAdmin && currentUser?.role !== 'ADMIN';
@@ -262,7 +262,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children, activeTab, setActi
                     <button
                       key={item.id}
                       onClick={() => handleTabClick(item.id, item.requiresAdmin)}
-                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+                      className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap flex-shrink-0 ${
                         isActive
                           ? theme.activeNav
                           : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/70 hover:text-slate-900 dark:hover:text-slate-100'

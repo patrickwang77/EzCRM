@@ -12,12 +12,6 @@ import { exportToCsv } from '../utils/exportCsv';
 import { inferPreviewTags } from '../utils/aiTagPreview';
 import { getStageColor } from '../utils/stageColors';
 import {
-  DollarSign,
-  Target,
-  Briefcase,
-  CheckCircle2,
-  TrendingUp,
-  ArrowUpRight,
   Building2,
   FolderTree,
   Download,
@@ -26,6 +20,13 @@ import {
   User as UserIcon,
   CalendarRange,
 } from 'lucide-react';
+import {
+  KpiFunnelIcon,
+  KpiBriefcaseIcon,
+  KpiWonIcon,
+  KpiLostIcon,
+  KpiTargetIcon,
+} from '../components/KpiIcons';
 
 interface KPIData {
   totalPotentialAmount: number;
@@ -38,8 +39,11 @@ interface KPIData {
   wonAmount: number;
   lostAmount: number;
   wonRate: number;
+  lostRate: number;
   closedWinRate: number;
   activityCompletionRate: number;
+  completedActivitiesCount: number;
+  totalActivitiesCount: number;
   taskCompletionRate: number;
   funnelConversion: number;
 }
@@ -69,7 +73,7 @@ interface DashboardProps {
 
 export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
   const { currentUser } = useAuth();
-  const { variant, theme, dataVersion } = useLayout();
+  const { variant, theme, dataVersion, isCopilotOpen } = useLayout();
 
   // Slicers State
   const [selectedOrgId, setSelectedOrgId] = useState<string>('');
@@ -639,116 +643,251 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
         </button>
       </div>
 
-      {/* 4 Redesigned KPI Cards (需求 #1) */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* KPI 1: 全部潛在商機 + BD Progress % */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs flex flex-col justify-between min-h-[144px]">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-slate-500 dark:text-slate-400">全部潛在商機</span>
-            <div className="p-2 bg-emerald-50 dark:bg-emerald-950/30 rounded-xl border border-emerald-100 dark:border-emerald-900/50">
-              <DollarSign className="w-4 h-4 text-emerald-500" />
-            </div>
-          </div>
-          <div className="mt-2">
-            <h3 className="text-2xl font-extrabold text-slate-800 dark:text-white tracking-tight">
-              {formatCurrency(kpis.totalPotentialAmount)}
-            </h3>
-            <div className="mt-2 pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs">
-              <span className="font-bold text-slate-500 dark:text-slate-400 flex items-center gap-1">
-                <ArrowUpRight className="w-3.5 h-3.5 text-emerald-500" />
-                BD Progress %
-              </span>
-              <span className={`font-black font-mono ${theme.accentText}`}>
-                {kpis.bdProgressRate.toFixed(1)}%
-              </span>
-            </div>
-            <p className="text-[10px] text-slate-400 mt-0.5">
-              加權金額 {formatCompactCurrency(kpis.expectedRevenue)} ÷ 潛在總額 (不含 BD Lost)
-            </p>
-          </div>
-        </div>
+      {/* 5 Executive KPI Cards (解耦活動完成率與 BD Lost，保留既有文字與 A/B/C 主題配色) */}
+      {(() => {
+        const refAmountBase = kpis.totalPotentialAmount > 0
+          ? kpis.totalPotentialAmount
+          : kpis.wonAmount + kpis.lostAmount;
+        const wonAmountShare = refAmountBase > 0 ? (kpis.wonAmount / refAmountBase) * 100 : 0;
+        const lostAmountShare = refAmountBase > 0 ? (kpis.lostAmount / refAmountBase) * 100 : 0;
 
-        {/* KPI 2: BD Case Count (進行中 / 已成交 / 已流失) */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs flex flex-col justify-between min-h-[144px]">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-slate-500 dark:text-slate-400">BD Case Count</span>
-            <div className={`p-2 rounded-xl border ${theme.accentSoftBg} ${theme.accentBorder}`}>
-              <Briefcase className={`w-4 h-4 ${theme.accentText}`} />
-            </div>
-          </div>
-          <div className="mt-2">
-            <div className="flex items-baseline gap-1.5 text-2xl font-extrabold tracking-tight">
-              <span className="text-sky-600 dark:text-sky-400">{kpis.openCount}</span>
-              <span className="text-slate-300 dark:text-slate-600 text-lg">/</span>
-              <span className="text-emerald-600 dark:text-emerald-400">{kpis.wonCount}</span>
-              <span className="text-slate-300 dark:text-slate-600 text-lg">/</span>
-              <span className="text-rose-600 dark:text-rose-400">{kpis.lostCount}</span>
-            </div>
-            <div className="mt-2 pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-[11px] font-bold">
-              <span className="text-slate-500 dark:text-slate-400">
-                <span className="text-sky-600 dark:text-sky-400">進行中</span> /{' '}
-                <span className="text-emerald-600 dark:text-emerald-400">已成交</span> /{' '}
-                <span className="text-rose-600 dark:text-rose-400">已流失</span>
-              </span>
-              <span className="text-slate-400 font-mono">共 {kpis.totalOpportunitiesCount} 案</span>
-            </div>
-          </div>
-        </div>
+        const openBarBg =
+          variant === 'B' ? 'bg-teal-500' : variant === 'C' ? 'bg-violet-500' : 'bg-blue-500';
+        const openDotBg =
+          variant === 'B' ? 'bg-teal-500' : variant === 'C' ? 'bg-violet-500' : 'bg-blue-500';
 
-        {/* KPI 3: BD WON AMT (Top) & BD WON % (Bottom = wonCount / totalCount) */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs flex flex-col justify-between min-h-[144px]">
-          <div className="pb-2.5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
-            <div>
-              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">BD WON AMT</span>
-              <h3 className="text-base font-black text-emerald-600 dark:text-emerald-400 mt-0.5">
-                {formatCurrency(kpis.wonAmount)}
-              </h3>
-            </div>
-            <div className="p-1.5 bg-emerald-50 dark:bg-emerald-950/30 rounded-lg text-emerald-500">
-              <DollarSign className="w-3.5 h-3.5" />
-            </div>
-          </div>
-          <div className="pt-2.5 flex items-center justify-between">
-            <div>
-              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                BD WON % ({kpis.wonCount}/{kpis.totalOpportunitiesCount})
-              </span>
-              <h3 className="text-base font-black text-amber-500 dark:text-amber-400 mt-0.5">
-                {kpis.wonRate.toFixed(1)}%
-              </h3>
-            </div>
-            <div className="p-1.5 bg-amber-50 dark:bg-amber-950/30 rounded-lg text-amber-500">
-              <Target className="w-3.5 h-3.5" />
-            </div>
-          </div>
-        </div>
+        const activityStatus =
+          kpis.totalActivitiesCount === 0
+            ? { label: '尚無任務', cls: 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700' }
+            : kpis.activityCompletionRate >= 80
+            ? { label: '優良', cls: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30' }
+            : kpis.activityCompletionRate >= 60
+            ? { label: '良好', cls: `${theme.accentSoftBg} ${theme.accentText} ${theme.accentBorder}` }
+            : { label: '待加強', cls: 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30' };
 
-        {/* KPI 4: BD LOST AMT (Top) & 活動完成率 (Bottom) */}
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs flex flex-col justify-between min-h-[144px]">
-          <div className="pb-2.5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
-            <div>
-              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">BD LOST AMT</span>
-              <h3 className="text-base font-black text-rose-600 dark:text-rose-400 mt-0.5">
-                {formatCurrency(kpis.lostAmount)}
-              </h3>
+        const gridCols =
+          variant === 'C' && isCopilotOpen
+            ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5'
+            : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5';
+
+        return (
+          <div className={`grid ${gridCols} gap-3.5`}>
+            {/* KPI 1: 全部潛在商機 + BD Progress % */}
+            <div className="bg-white dark:bg-slate-900/95 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-xs hover:shadow-md transition-shadow flex flex-col justify-between min-h-[158px]">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <span className="text-xs font-bold text-slate-500 dark:text-slate-400 block">
+                    全部潛在商機
+                  </span>
+                  <h3
+                    className="text-[19px] 2xl:text-[22px] font-black text-slate-900 dark:text-white tracking-tight tabular-nums mt-1.5 truncate"
+                    title={formatCurrency(kpis.totalPotentialAmount)}
+                  >
+                    {formatCurrency(kpis.totalPotentialAmount)}
+                  </h3>
+                </div>
+                <KpiFunnelIcon variant={variant} className="w-10 h-10 flex-shrink-0 -mt-0.5" />
+              </div>
+
+              <div className="mt-3 space-y-1.5">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-bold text-slate-500 dark:text-slate-400">BD Progress %</span>
+                  <span className={`font-black font-mono tabular-nums ${theme.accentText}`}>
+                    {kpis.bdProgressRate.toFixed(1)}%
+                  </span>
+                </div>
+                <div className="h-1.5 w-full rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all duration-500 ${theme.progressBar}`}
+                    style={{ width: `${Math.min(100, Math.max(0, kpis.bdProgressRate))}%` }}
+                  />
+                </div>
+                <p className="text-[10px] text-slate-400 dark:text-slate-400 pt-0.5 truncate" title={`加權金額 ${formatCurrency(kpis.expectedRevenue)} ÷ 潛在總額 (不含 BD Lost)`}>
+                  加權金額 {formatCompactCurrency(kpis.expectedRevenue)} ÷ 潛在總額 (不含流失)
+                </p>
+              </div>
             </div>
-            <div className="p-1.5 bg-rose-50 dark:bg-rose-950/30 rounded-lg text-rose-500">
-              <TrendingUp className="w-3.5 h-3.5" />
+
+            {/* KPI 2: BD Case Count (進行中 / 已成交 / 已流失) */}
+            <div className="bg-white dark:bg-slate-900/95 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-xs hover:shadow-md transition-shadow flex flex-col justify-between min-h-[158px]">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <span className="text-xs font-bold text-slate-500 dark:text-slate-400 block">
+                    BD Case Count
+                  </span>
+                  <div className="flex items-baseline gap-1 mt-1.5">
+                    <h3 className="text-[22px] 2xl:text-[24px] font-black text-slate-900 dark:text-white tracking-tight tabular-nums">
+                      {kpis.totalOpportunitiesCount}
+                    </h3>
+                    <span className="text-xs font-bold text-slate-500 dark:text-slate-400">案</span>
+                  </div>
+                </div>
+                <KpiBriefcaseIcon
+                  variant={variant}
+                  lostCount={kpis.lostCount}
+                  className="w-10 h-10 flex-shrink-0 -mt-0.5"
+                />
+              </div>
+
+              <div className="mt-3 space-y-2">
+                {/* 3-Segment Horizontal Ratio Bar */}
+                <div className="h-1.5 w-full rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden flex gap-0.5">
+                  {kpis.totalOpportunitiesCount > 0 ? (
+                    <>
+                      {kpis.openCount > 0 && (
+                        <div
+                          className={`h-full rounded-full transition-all duration-500 ${openBarBg}`}
+                          style={{ flexGrow: kpis.openCount }}
+                          title={`進行中 ${kpis.openCount} 案`}
+                        />
+                      )}
+                      {kpis.wonCount > 0 && (
+                        <div
+                          className="h-full rounded-full bg-emerald-500 transition-all duration-500"
+                          style={{ flexGrow: kpis.wonCount }}
+                          title={`已成交 ${kpis.wonCount} 案`}
+                        />
+                      )}
+                      {kpis.lostCount > 0 && (
+                        <div
+                          className="h-full rounded-full bg-rose-500 transition-all duration-500"
+                          style={{ flexGrow: kpis.lostCount }}
+                          title={`已流失 ${kpis.lostCount} 案`}
+                        />
+                      )}
+                    </>
+                  ) : null}
+                </div>
+
+                {/* Colored Dot Legend */}
+                <div className="flex items-center justify-between gap-1 text-[10px] font-bold text-slate-600 dark:text-slate-300 tabular-nums">
+                  <span className="inline-flex items-center gap-1 whitespace-nowrap">
+                    <span className={`w-1.5 h-1.5 rounded-full ${openDotBg}`} />
+                    進行中 {kpis.openCount}
+                  </span>
+                  <span className="inline-flex items-center gap-1 whitespace-nowrap">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                    已成交 {kpis.wonCount}
+                  </span>
+                  <span className="inline-flex items-center gap-1 whitespace-nowrap">
+                    <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
+                    已流失 {kpis.lostCount}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* KPI 3: BD WON AMT + BD WON % (固定同色系 Emerald 綠色強調) */}
+            <div className="relative overflow-hidden bg-white dark:bg-slate-900 dark:bg-gradient-to-br dark:from-emerald-950/75 dark:via-emerald-950/35 dark:to-slate-900/95 border border-emerald-200/80 dark:border-emerald-800/60 border-l-4 border-l-emerald-500 dark:border-l-emerald-400 rounded-2xl p-4 shadow-xs hover:shadow-md transition-shadow flex flex-col justify-between min-h-[158px]">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <span className="text-xs font-bold text-emerald-700 dark:text-emerald-300/90 block">
+                    BD WON AMT
+                  </span>
+                  <h3
+                    className="text-[19px] 2xl:text-[22px] font-black text-slate-900 dark:text-white tracking-tight tabular-nums mt-1.5 truncate"
+                    title={formatCurrency(kpis.wonAmount)}
+                  >
+                    {formatCurrency(kpis.wonAmount)}
+                  </h3>
+                </div>
+                <KpiWonIcon className="w-10 h-10 flex-shrink-0 -mt-0.5" />
+              </div>
+
+              <div className="mt-3 space-y-1.5">
+                <div className="flex items-center justify-between text-xs gap-1">
+                  <span className="font-bold text-slate-600 dark:text-slate-300 truncate">
+                    BD WON % ({kpis.wonCount}/{kpis.totalOpportunitiesCount})
+                  </span>
+                  <span className="px-1.5 py-0.5 rounded-md text-[11px] font-black font-mono tabular-nums bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 flex-shrink-0">
+                    {kpis.wonRate.toFixed(1)}%
+                  </span>
+                </div>
+                <div className="h-1.5 w-full rounded-full bg-emerald-100/80 dark:bg-emerald-950/80 overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-teal-400 transition-all duration-500"
+                    style={{ width: `${Math.min(100, Math.max(0, kpis.wonRate))}%` }}
+                  />
+                </div>
+                <p className="text-[10px] text-slate-500 dark:text-slate-400 pt-0.5 truncate">
+                  已成交 {kpis.wonCount} 案 · 佔潛在總額 {wonAmountShare.toFixed(1)}%
+                </p>
+              </div>
+            </div>
+
+            {/* KPI 4: BD LOST AMT + BD LOST % (固定同色系 Rose 紅色強調) */}
+            <div className="relative overflow-hidden bg-white dark:bg-slate-900 dark:bg-gradient-to-br dark:from-rose-950/75 dark:via-rose-950/35 dark:to-slate-900/95 border border-rose-200/80 dark:border-rose-800/60 border-l-4 border-l-rose-500 dark:border-l-rose-400 rounded-2xl p-4 shadow-xs hover:shadow-md transition-shadow flex flex-col justify-between min-h-[158px]">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <span className="text-xs font-bold text-rose-700 dark:text-rose-300/90 block">
+                    BD LOST AMT
+                  </span>
+                  <h3
+                    className="text-[19px] 2xl:text-[22px] font-black text-slate-900 dark:text-white tracking-tight tabular-nums mt-1.5 truncate"
+                    title={formatCurrency(kpis.lostAmount)}
+                  >
+                    {formatCurrency(kpis.lostAmount)}
+                  </h3>
+                </div>
+                <KpiLostIcon className="w-10 h-10 flex-shrink-0 -mt-0.5" />
+              </div>
+
+              <div className="mt-3 space-y-1.5">
+                <div className="flex items-center justify-between text-xs gap-1">
+                  <span className="font-bold text-slate-600 dark:text-slate-300 truncate">
+                    BD LOST % ({kpis.lostCount}/{kpis.totalOpportunitiesCount})
+                  </span>
+                  <span className="px-1.5 py-0.5 rounded-md text-[11px] font-black font-mono tabular-nums bg-rose-500/15 text-rose-700 dark:text-rose-300 border border-rose-500/30 flex-shrink-0">
+                    {kpis.lostRate.toFixed(1)}%
+                  </span>
+                </div>
+                <div className="h-1.5 w-full rounded-full bg-rose-100/80 dark:bg-rose-950/80 overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-rose-500 to-pink-500 transition-all duration-500"
+                    style={{ width: `${Math.min(100, Math.max(0, kpis.lostRate))}%` }}
+                  />
+                </div>
+                <p className="text-[10px] text-slate-500 dark:text-slate-400 pt-0.5 truncate">
+                  已流失 {kpis.lostCount} 案 · 佔潛在總額 {lostAmountShare.toFixed(1)}%
+                </p>
+              </div>
+            </div>
+
+            {/* KPI 5: 活動完成率 (獨立營運效率指標，與金額解耦) */}
+            <div className="bg-white dark:bg-slate-900/95 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-xs hover:shadow-md transition-shadow flex flex-col justify-between min-h-[158px]">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <span className="text-xs font-bold text-slate-500 dark:text-slate-400 block">
+                    活動完成率
+                  </span>
+                  <h3 className="text-[22px] 2xl:text-[24px] font-black text-slate-900 dark:text-white tracking-tight tabular-nums mt-1.5">
+                    {kpis.activityCompletionRate.toFixed(1)}%
+                  </h3>
+                </div>
+                <KpiTargetIcon variant={variant} className="w-10 h-10 flex-shrink-0 -mt-0.5" />
+              </div>
+
+              <div className="mt-3 space-y-1.5">
+                <div className="flex items-center justify-between text-xs gap-1">
+                  <span className="font-bold text-slate-500 dark:text-slate-400">執行進度</span>
+                  <span className={`px-1.5 py-0.5 rounded-md text-[10px] font-black border ${activityStatus.cls}`}>
+                    {activityStatus.label}
+                  </span>
+                </div>
+                <div className="h-1.5 w-full rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all duration-500 ${theme.progressBar}`}
+                    style={{ width: `${Math.min(100, Math.max(0, kpis.activityCompletionRate))}%` }}
+                  />
+                </div>
+                <p className="text-[10px] text-slate-400 dark:text-slate-400 pt-0.5 truncate">
+                  已完成 {kpis.completedActivitiesCount}/{kpis.totalActivitiesCount} 項 · 獨立營運效率指標
+                </p>
+              </div>
             </div>
           </div>
-          <div className="pt-2.5 flex items-center justify-between">
-            <div>
-              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">活動完成率</span>
-              <h3 className={`text-base font-black mt-0.5 ${theme.accentText}`}>
-                {kpis.activityCompletionRate.toFixed(1)}%
-              </h3>
-            </div>
-            <div className={`p-1.5 rounded-lg ${theme.accentSoftBg} ${theme.accentText}`}>
-              <CheckCircle2 className="w-3.5 h-3.5" />
-            </div>
-          </div>
-        </div>
-      </div>
+        );
+      })()}
 
       {/* 圖表與排行榜區塊 */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
