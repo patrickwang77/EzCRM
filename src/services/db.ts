@@ -147,7 +147,7 @@ const DEFAULT_STAGES: Stage[] = [
   { id: 'stage-3', name: '方案展示', displayOrder: 3, isActive: true, defaultWinProbability: 50, outcome: 'OPEN' },
   { id: 'stage-4', name: '商務談判', displayOrder: 4, isActive: true, defaultWinProbability: 80, outcome: 'OPEN' },
   { id: 'stage-5', name: 'BD Won', displayOrder: 5, isActive: true, defaultWinProbability: 100, outcome: 'WON' },
-  { id: 'stage-6', name: 'BD Lost', displayOrder: 6, isActive: true, defaultWinProbability: 0, outcome: 'LOST' },
+  { id: 'stage-6', name: 'BD Lost', displayOrder: 6, isActive: true, defaultWinProbability: 100, outcome: 'LOST' },
 ];
 
 const DEFAULT_ACTIVITY_TYPES: ActivityTypeConfig[] = [
@@ -421,7 +421,7 @@ export const generateId = (prefix: string): string => {
   return `${prefix}-${Date.now()}-${rand}`;
 };
 
-// 自動補齊舊版 stages 缺失的 outcome 欄位，並鎖定 WON=100% / LOST=0%
+// 自動補齊舊版 stages 缺失的 outcome 欄位，並鎖定 WON=100% / LOST=100%（以 outcome 區分，讓漏斗能視覺化顯示 LOST 金額，業績與 BD Progress % 僅採計 OPEN+WON）
 const normalizeStages = (stages: Stage[]): { stages: Stage[]; changed: boolean } => {
   let changed = false;
   const sorted = [...stages].sort((a, b) => a.displayOrder - b.displayOrder);
@@ -432,20 +432,15 @@ const normalizeStages = (stages: Stage[]): { stages: Stage[]; changed: boolean }
   const normalized = sorted.map(s => {
     let outcome = s.outcome;
     if (!outcome) {
-      if (s.id === inferredLostId || s.defaultWinProbability === 0) outcome = 'LOST';
-      else if (s.id === inferredWonId || s.defaultWinProbability === 100) outcome = 'WON';
+      if (s.id === inferredLostId || s.defaultWinProbability === 0 || /lost|loss|流失/i.test(s.name)) outcome = 'LOST';
+      else if (s.id === inferredWonId || s.defaultWinProbability === 100 || /won|awarded|成交/i.test(s.name)) outcome = 'WON';
       else outcome = 'OPEN';
       changed = true;
     }
     let prob = s.defaultWinProbability;
     let isActive = s.isActive;
-    if (outcome === 'WON' && (prob !== 100 || !isActive)) {
+    if ((outcome === 'WON' || outcome === 'LOST') && (prob !== 100 || !isActive)) {
       prob = 100;
-      isActive = true;
-      changed = true;
-    }
-    if (outcome === 'LOST' && (prob !== 0 || !isActive)) {
-      prob = 0;
       isActive = true;
       changed = true;
     }
@@ -491,17 +486,44 @@ export const initDB = (): void => {
     }
   }
 
-  // 自動遷移舊版 stages 加上 outcome 欄位
+  // 自動遷移舊版 stages 加上 outcome 欄位，並同步結案 (WON/LOST) 商機權重為 100%
   const rawStages = localStorage.getItem(STORAGE_KEYS.STAGES);
+  let activeStagesForMigration: Stage[] = DEFAULT_STAGES;
   if (rawStages) {
     try {
       const parsed: Stage[] = JSON.parse(rawStages);
       const { stages: migrated, changed } = normalizeStages(parsed);
+      activeStagesForMigration = migrated;
       if (changed) {
         localStorage.setItem(STORAGE_KEYS.STAGES, JSON.stringify(migrated));
       }
     } catch (e) {
       console.warn('Failed to migrate stages', e);
+    }
+  }
+
+  const rawOpps = localStorage.getItem(STORAGE_KEYS.OPPORTUNITIES);
+  if (rawOpps) {
+    try {
+      const parsedOpps: Opportunity[] = JSON.parse(rawOpps);
+      const terminalStageIds = new Set(
+        activeStagesForMigration
+          .filter(s => s.outcome === 'WON' || s.outcome === 'LOST')
+          .map(s => s.id)
+      );
+      let oppsChanged = false;
+      const migratedOpps = parsedOpps.map(o => {
+        if (terminalStageIds.has(o.stageId) && o.winProbability !== 100) {
+          oppsChanged = true;
+          return { ...o, winProbability: 100 };
+        }
+        return o;
+      });
+      if (oppsChanged) {
+        localStorage.setItem(STORAGE_KEYS.OPPORTUNITIES, JSON.stringify(migratedOpps));
+      }
+    } catch (e) {
+      console.warn('Failed to migrate terminal opportunities winProbability', e);
     }
   }
 
@@ -898,12 +920,14 @@ export const db = {
     const existing = list.find(s => s.id === stage.id);
     const outcome: StageOutcome = existing?.outcome || stage.outcome || 'OPEN';
 
-    // 強制鎖定 WON / LOST 的贏率與啟用狀態
+    // 強制鎖定 WON / LOST 的贏率 (100%) 與啟用狀態（業績僅採計 OPEN+WON，LOST 100% 供漏斗視覺化）
     const enforced: Stage = {
       ...stage,
       outcome,
       defaultWinProbability:
-        outcome === 'WON' ? 100 : outcome === 'LOST' ? 0 : Math.max(1, Math.min(99, stage.defaultWinProbability)),
+        outcome === 'WON' || outcome === 'LOST'
+          ? 100
+          : Math.max(1, Math.min(99, stage.defaultWinProbability)),
       isActive: outcome === 'WON' || outcome === 'LOST' ? true : stage.isActive,
     };
 
@@ -1025,7 +1049,7 @@ export const db = {
     }
     const targetStage = stages.find(s => s.id === opp.stageId);
     if (targetStage?.outcome === 'WON' || targetStage?.outcome === 'LOST') {
-      opp.winProbability = targetStage.outcome === 'WON' ? 100 : 0;
+      opp.winProbability = 100;
       if (!opp.closedAt || (existing && existing.stageId !== opp.stageId)) {
         opp.closedAt = existing?.stageId === opp.stageId && existing.closedAt ? existing.closedAt : todayStr;
       }

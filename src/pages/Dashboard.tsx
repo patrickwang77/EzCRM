@@ -161,7 +161,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
           const stageOpps = opps.filter(o => o.stageId === stage.id);
           const originalAmount = stageOpps.reduce((sum, o) => sum + o.amount, 0);
           const weightedAmount = stageOpps.reduce(
-            (sum, o) => sum + (stage.outcome === 'LOST' ? 0 : o.amount * (o.winProbability / 100)),
+            (sum, o) => sum + o.amount * (o.winProbability / 100),
             0
           );
           return {
@@ -327,6 +327,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
       return {
         id: i,
         stageName: d.stageName,
+        outcome: d.outcome,
         originalAmount: d.originalAmount,
         weightedAmount: d.weightedAmount,
         count: d.count,
@@ -393,7 +394,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
                       >
                         <title>
                           {funnelViewMode === 'weighted'
-                            ? `${bar.stageName}: 加權額 ${formatCurrency(bar.weightedAmount)} / 原始額 ${formatCurrency(bar.originalAmount)} (${bar.count} 個商機)`
+                            ? bar.outcome === 'LOST'
+                              ? `${bar.stageName}: 流失金額 ${formatCurrency(bar.weightedAmount)} (${bar.count} 個商機，不計入潛在業績與 BD Progress %)`
+                              : `${bar.stageName}: 加權額 ${formatCurrency(bar.weightedAmount)} / 原始額 ${formatCurrency(bar.originalAmount)} (${bar.count} 個商機)`
                             : `${bar.stageName}: ${bar.count} 個商機 (原始金額總額 ${formatCurrency(bar.originalAmount)})`}
                         </title>
                       </rect>
@@ -423,8 +426,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
               <div className="text-right flex-shrink-0 flex flex-col">
                 {funnelViewMode === 'weighted' ? (
                   <>
-                    <span className="text-xs font-black text-slate-800 dark:text-slate-100">
-                      加權: {formatCurrency(bar.weightedAmount)}
+                    <span className={`text-xs font-black ${bar.outcome === 'LOST' ? 'text-rose-600 dark:text-rose-400' : 'text-slate-800 dark:text-slate-100'}`}>
+                      {bar.outcome === 'LOST' ? '流失' : '加權'}: {formatCurrency(bar.weightedAmount)}
                     </span>
                     <span className="text-[10px] text-slate-400 font-bold">
                       原始: {formatCurrency(bar.originalAmount)} ({bar.count}個)

@@ -474,7 +474,7 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
         <div className="space-y-4">
           <div className="flex flex-wrap justify-between items-center gap-2">
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              設置商機進度看板的展示階段與贏率。<strong>BD Won (100%)</strong> 與 <strong>BD Lost (0%)</strong> 為必要階段（可改名、贏率固定、不可刪除），至少保留 3 個啟用階段。
+              設置商機進度看板的展示階段與權重。<strong>BD Won (100%)</strong> 與 <strong>BD Lost (100%)</strong> 為必要結案階段（可改名、權重鎖定 100%、不可刪除；業績與 BD Progress % 僅採計 OPEN + WON，LOST 獨立呈現於銷售漏斗與流失金額），至少保留 3 個啟用階段。
             </p>
             <button
               onClick={() => handleOpenModal('stage')}
@@ -1033,7 +1033,7 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
                           預設贏率 {isTerminal ? '(系統鎖定)' : '(1-99%) *'}
                         </label>
                         <input
-                          type="number" required min={isTerminal ? 0 : 1} max={isTerminal ? 100 : 99}
+                          type="number" required min={isTerminal ? 100 : 1} max={isTerminal ? 100 : 99}
                           disabled={isTerminal}
                           value={stageForm.defaultWinProbability}
                           onChange={(e) => setStageForm({ ...stageForm, defaultWinProbability: e.target.value })}

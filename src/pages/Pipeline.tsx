@@ -2043,7 +2043,9 @@ export const Pipeline: React.FC = () => {
                 </span>
                 <p className="text-lg font-black text-emerald-500 dark:text-emerald-400 mt-1">
                   {formatCompactCurrency(
-                    amOpps.reduce((sum, o) => sum + o.amount * (o.winProbability / 100), 0)
+                    amOpps
+                      .filter(o => stages.find(s => s.id === o.stageId)?.outcome !== 'LOST')
+                      .reduce((sum, o) => sum + o.amount * (o.winProbability / 100), 0)
                   )}
                 </p>
               </div>
