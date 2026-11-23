@@ -6,6 +6,7 @@ import { GlobalQuickCreateModal } from './components/GlobalQuickCreateModal';
 import { Dashboard } from './pages/Dashboard';
 import { Pipeline } from './pages/Pipeline';
 import { Accounts } from './pages/Accounts';
+import { ManagementMetrics } from './pages/ManagementMetrics';
 import { Activities } from './pages/Activities';
 import { Settings } from './pages/Settings';
 
@@ -20,6 +21,8 @@ function AppContent() {
         return <Pipeline />;
       case 'accounts':
         return <Accounts setActiveTab={setActiveTab} />;
+      case 'metrics':
+        return <ManagementMetrics />;
       case 'activities':
         return <Activities setActiveTab={setActiveTab} />;
       case 'systemSettings':

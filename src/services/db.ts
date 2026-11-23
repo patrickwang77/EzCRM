@@ -31,19 +31,23 @@ export interface Contact {
   phone: string;
 }
 
+export type StageOutcome = 'OPEN' | 'WON' | 'LOST';
+
 export interface Stage {
   id: string;
   name: string;
   displayOrder: number;
   isActive: boolean;
   defaultWinProbability: number; // 預設贏率 0-100
+  outcome: StageOutcome; // 明確區分進行中 / 成交 / 流失
 }
 
 export interface ActivityTypeConfig {
   id: string;
   name: string;      // 例如: '待辦任務', '會議拜訪'
-  icon: string;      // 'CheckSquare' | 'Video' | 'Phone' | 'Mail' | 'FileText' 等
+  icon: string;      // 'CheckSquare' | 'Video' | 'FileText' | 'Calendar' | 'Coffee' | 'MessageSquare' | 'Coins' | 'Gift'
   color: string;     // 'amber' | 'blue' | 'emerald' | 'purple' | 'rose'
+  unitCost?: number; // 選填：單次活動量化單價 (NTD)
 }
 
 export interface ProductLine {
@@ -55,6 +59,11 @@ export interface ProductLine {
 export interface BudgetItemConfig {
   id: string;
   name: string;
+}
+
+export interface SalesTarget {
+  month: string; // YYYY-MM
+  targetAmount: number;
 }
 
 export interface EntityTag {
@@ -69,9 +78,11 @@ export interface Opportunity {
   userId: string; // 負責業務
   stageId: string; // 目前所處階段
   title: string;
-  amount: number; // 預估金額 (每月數量 * 單價)
+  amount: number; // Monthly Deal Revenue (每月數量 * 單價)
   winProbability: number; // 贏率 0-100
   expectedCloseDate: string;
+  createdAt?: string; // YYYY-MM-DD
+  closedAt?: string;  // YYYY-MM-DD (進入 WON / LOST 時寫入)
   
   productLineId: string;
   monthlyQuantity: number;
@@ -80,6 +91,14 @@ export interface Opportunity {
   schedules: { [stageId: string]: string };
   budgets: { budgetItemId: string; amount: number }[];
   tags?: EntityTag[]; // 預留給手動 / LLM 自動標籤
+}
+
+export interface QueryFilters {
+  orgId?: string;
+  companyId?: string;
+  userId?: string;
+  startMonth?: string; // YYYY-MM
+  endMonth?: string;   // YYYY-MM
 }
 
 export interface Activity {
@@ -123,12 +142,12 @@ const DEFAULT_CONTACTS: Contact[] = [
 ];
 
 const DEFAULT_STAGES: Stage[] = [
-  { id: 'stage-1', name: '初步接洽', displayOrder: 1, isActive: true, defaultWinProbability: 10 },
-  { id: 'stage-2', name: '需求確認', displayOrder: 2, isActive: true, defaultWinProbability: 30 },
-  { id: 'stage-3', name: '方案展示', displayOrder: 3, isActive: true, defaultWinProbability: 50 },
-  { id: 'stage-4', name: '商務談判', displayOrder: 4, isActive: true, defaultWinProbability: 80 },
-  { id: 'stage-5', name: '贏得交易 (成交)', displayOrder: 5, isActive: true, defaultWinProbability: 100 },
-  { id: 'stage-6', name: '流失交易', displayOrder: 6, isActive: true, defaultWinProbability: 0 },
+  { id: 'stage-1', name: '初步接洽', displayOrder: 1, isActive: true, defaultWinProbability: 10, outcome: 'OPEN' },
+  { id: 'stage-2', name: '需求確認', displayOrder: 2, isActive: true, defaultWinProbability: 30, outcome: 'OPEN' },
+  { id: 'stage-3', name: '方案展示', displayOrder: 3, isActive: true, defaultWinProbability: 50, outcome: 'OPEN' },
+  { id: 'stage-4', name: '商務談判', displayOrder: 4, isActive: true, defaultWinProbability: 80, outcome: 'OPEN' },
+  { id: 'stage-5', name: 'BD Won', displayOrder: 5, isActive: true, defaultWinProbability: 100, outcome: 'WON' },
+  { id: 'stage-6', name: 'BD Lost', displayOrder: 6, isActive: true, defaultWinProbability: 0, outcome: 'LOST' },
 ];
 
 const DEFAULT_ACTIVITY_TYPES: ActivityTypeConfig[] = [
@@ -349,6 +368,7 @@ const STORAGE_KEYS = {
   ACTIVITIES: 'crm_activities',
   PRODUCT_LINES: 'crm_product_lines',
   BUDGET_ITEMS: 'crm_budget_items',
+  SALES_TARGETS: 'crm_sales_targets',
 };
 
 const IS_CLEAN_START = import.meta.env.VITE_CLEAN_START === 'true';
@@ -369,6 +389,7 @@ const getCleanFallback = <T>(key: string, defaultValue: T): T => {
     case STORAGE_KEYS.ACTIVITIES:
     case STORAGE_KEYS.PRODUCT_LINES:
     case STORAGE_KEYS.BUDGET_ITEMS:
+    case STORAGE_KEYS.SALES_TARGETS:
       return [] as unknown as T;
     default:
       return defaultValue;
@@ -387,6 +408,51 @@ const getFromStorage = <T>(key: string, defaultValue: T): T => {
 
 const saveToStorage = <T>(key: string, data: T): void => {
   localStorage.setItem(key, JSON.stringify(data));
+};
+
+const notifyUsersChanged = () => {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('crm:users-changed'));
+  }
+};
+
+export const generateId = (prefix: string): string => {
+  const rand = Math.random().toString(36).slice(2, 7);
+  return `${prefix}-${Date.now()}-${rand}`;
+};
+
+// 自動補齊舊版 stages 缺失的 outcome 欄位，並鎖定 WON=100% / LOST=0%
+const normalizeStages = (stages: Stage[]): { stages: Stage[]; changed: boolean } => {
+  let changed = false;
+  const sorted = [...stages].sort((a, b) => a.displayOrder - b.displayOrder);
+  const activeSorted = sorted.filter(s => s.isActive);
+  const inferredLostId = activeSorted[activeSorted.length - 1]?.id;
+  const inferredWonId = activeSorted.length >= 2 ? activeSorted[activeSorted.length - 2]?.id : undefined;
+
+  const normalized = sorted.map(s => {
+    let outcome = s.outcome;
+    if (!outcome) {
+      if (s.id === inferredLostId || s.defaultWinProbability === 0) outcome = 'LOST';
+      else if (s.id === inferredWonId || s.defaultWinProbability === 100) outcome = 'WON';
+      else outcome = 'OPEN';
+      changed = true;
+    }
+    let prob = s.defaultWinProbability;
+    let isActive = s.isActive;
+    if (outcome === 'WON' && (prob !== 100 || !isActive)) {
+      prob = 100;
+      isActive = true;
+      changed = true;
+    }
+    if (outcome === 'LOST' && (prob !== 0 || !isActive)) {
+      prob = 0;
+      isActive = true;
+      changed = true;
+    }
+    return { ...s, outcome, defaultWinProbability: prob, isActive };
+  });
+
+  return { stages: normalized, changed };
 };
 
 export const initDB = (): void => {
@@ -425,6 +491,20 @@ export const initDB = (): void => {
     }
   }
 
+  // 自動遷移舊版 stages 加上 outcome 欄位
+  const rawStages = localStorage.getItem(STORAGE_KEYS.STAGES);
+  if (rawStages) {
+    try {
+      const parsed: Stage[] = JSON.parse(rawStages);
+      const { stages: migrated, changed } = normalizeStages(parsed);
+      if (changed) {
+        localStorage.setItem(STORAGE_KEYS.STAGES, JSON.stringify(migrated));
+      }
+    } catch (e) {
+      console.warn('Failed to migrate stages', e);
+    }
+  }
+
   getFromStorage(STORAGE_KEYS.USERS, DEFAULT_USERS);
   getFromStorage(STORAGE_KEYS.COMPANIES, DEFAULT_COMPANIES);
   getFromStorage(STORAGE_KEYS.CONTACTS, DEFAULT_CONTACTS);
@@ -434,49 +514,205 @@ export const initDB = (): void => {
   getFromStorage(STORAGE_KEYS.ACTIVITIES, DEFAULT_ACTIVITIES);
   getFromStorage(STORAGE_KEYS.PRODUCT_LINES, DEFAULT_PRODUCT_LINES);
   getFromStorage(STORAGE_KEYS.BUDGET_ITEMS, DEFAULT_BUDGET_ITEMS);
+  getFromStorage(STORAGE_KEYS.SALES_TARGETS, []);
 };
 
-// Slicer Filter 輔助函數：取得某組織的所有子組織 ID 列表
-const getSubOrgIds = (orgId: string, orgs: Organization[]): string[] => {
+// Slicer Filter 輔助函數：取得某組織自身及所有子組織 ID 列表（內建防循環 visited guard — B-3）
+export const getSubOrgIds = (
+  orgId: string,
+  orgs: Organization[],
+  visited: Set<string> = new Set()
+): string[] => {
+  if (visited.has(orgId)) return [];
+  visited.add(orgId);
   let subIds = [orgId];
   const directChildren = orgs.filter(o => o.parentId === orgId).map(o => o.id);
   for (const childId of directChildren) {
-    subIds = [...subIds, ...getSubOrgIds(childId, orgs)];
+    subIds = [...subIds, ...getSubOrgIds(childId, orgs, visited)];
   }
   return subIds;
 };
 
-// 篩選商機的核心過濾函數
+// 取得某組織的所有後代 ID（不含自己），供設定頁防止循環父子指派 (B-3)
+export const getDescendantOrgIds = (orgId: string, orgs: Organization[]): string[] => {
+  return getSubOrgIds(orgId, orgs).filter(id => id !== orgId);
+};
+
+// 取得目前使用者依 RBAC 權限可見的組織清單 (BU_HEAD 僅見自己部門樹 — B-4)
+export const getVisibleOrgsForUser = (
+  orgs: Organization[],
+  users: User[],
+  role: UserRole,
+  currentUserId: string
+): Organization[] => {
+  if (role === 'ADMIN') return orgs;
+  if (role === 'BU_HEAD') {
+    const me = users.find(u => u.id === currentUserId);
+    if (me?.orgId) {
+      const allowed = new Set(getSubOrgIds(me.orgId, orgs));
+      return orgs.filter(o => allowed.has(o.id));
+    }
+    return orgs;
+  }
+  return [];
+};
+
+// 取得特定組織下階所有人員（作為條件式 Sales Rep Slicer；無人則回傳空陣列）
+export const getEligibleSalesReps = (
+  orgs: Organization[],
+  users: User[],
+  role: UserRole,
+  currentUserId: string,
+  selectedOrgId?: string
+): User[] => {
+  if (role === 'AM') return [];
+  let targetOrgIds: string[] = [];
+
+  if (selectedOrgId) {
+    targetOrgIds = getSubOrgIds(selectedOrgId, orgs);
+  } else if (role === 'BU_HEAD') {
+    const me = users.find(u => u.id === currentUserId);
+    if (me?.orgId) {
+      targetOrgIds = getSubOrgIds(me.orgId, orgs);
+    } else {
+      targetOrgIds = orgs.map(o => o.id);
+    }
+  } else {
+    // ADMIN 未選特定部門時，僅涵蓋已歸屬任一組織的人員
+    targetOrgIds = orgs.map(o => o.id);
+  }
+
+  if (targetOrgIds.length === 0) return [];
+  const orgSet = new Set(targetOrgIds);
+  return users.filter(u => u.orgId !== null && orgSet.has(u.orgId));
+};
+
+// 取得商機建立日期（相容舊資料 fallback）
+export const getOppCreatedDate = (opp: Opportunity): string => {
+  if (opp.createdAt) return opp.createdAt;
+  const schedDates = Object.values(opp.schedules || {}).filter(Boolean).sort();
+  if (schedDates.length > 0) return schedDates[0];
+  if (opp.expectedCloseDate) {
+    const ts = new Date(opp.expectedCloseDate).getTime() - 30 * 86400000;
+    if (!Number.isNaN(ts)) return new Date(ts).toISOString().slice(0, 10);
+  }
+  return new Date().toISOString().slice(0, 10);
+};
+
+// 取得商機結案日期（若目前在 WON/LOST 階段）
+export const getOppClosedDate = (opp: Opportunity, stages: Stage[]): string | null => {
+  const st = stages.find(s => s.id === opp.stageId);
+  if (!st || st.outcome === 'OPEN') return null;
+  if (opp.closedAt) return opp.closedAt;
+  if (opp.schedules?.[st.id]) return opp.schedules[st.id];
+  if (opp.expectedCloseDate) return opp.expectedCloseDate;
+  return new Date().toISOString().slice(0, 10);
+};
+
+// 判斷商機是否落於月區間 [startMonth, endMonth]：
+// 1. 該區間建立的 BD
+// 2. 該區間內結案 (WON/LOST) 的 case
+// 3. 該時間點結束時尚未進入 WON/LOST 的舊案
+export const isOppInMonthRange = (
+  opp: Opportunity,
+  stages: Stage[],
+  startMonth?: string,
+  endMonth?: string
+): boolean => {
+  if (!startMonth && !endMonth) return true;
+  const effStart = startMonth || '1970-01';
+  const effEnd = endMonth || '2999-12';
+  const rangeStart = `${effStart}-01`;
+  // Compute last day of effEnd month
+  const [ey, em] = effEnd.split('-').map(Number);
+  const lastDay = new Date(ey, em, 0).getDate();
+  const rangeEnd = `${effEnd}-${String(lastDay).padStart(2, '0')}`;
+
+  const created = getOppCreatedDate(opp);
+  const closed = getOppClosedDate(opp, stages);
+  const st = stages.find(s => s.id === opp.stageId);
+  const isOpen = !st || st.outcome === 'OPEN';
+
+  // (1) Created within [rangeStart, rangeEnd]
+  if (created >= rangeStart && created <= rangeEnd) return true;
+  // (2) Closed within [rangeStart, rangeEnd]
+  if (closed && closed >= rangeStart && closed <= rangeEnd) return true;
+  // (3) Created on/before rangeEnd and still OPEN at rangeEnd (either still OPEN now or closed AFTER rangeEnd)
+  if (created <= rangeEnd && (isOpen || (closed !== null && closed > rangeEnd))) return true;
+
+  return false;
+};
+
+// 判斷活動是否落於月區間 [startMonth, endMonth]
+export const isActivityInMonthRange = (
+  act: Activity,
+  startMonth?: string,
+  endMonth?: string
+): boolean => {
+  if (!startMonth && !endMonth) return true;
+  const ym = (act.dueDate || '').slice(0, 7);
+  if (!ym) return true;
+  if (startMonth && ym < startMonth) return false;
+  if (endMonth && ym > endMonth) return false;
+  return true;
+};
+
+// 篩選商機的核心過濾函數 (支援 AM/BU_HEAD RBAC、組織樹、Sales Rep、客戶、月區間)
 const filterOpps = (
-  opps: Opportunity[], 
-  role: UserRole, 
-  userId: string, 
-  filters?: { orgId?: string; companyId?: string }
+  opps: Opportunity[],
+  role: UserRole,
+  userId: string,
+  filters?: QueryFilters
 ): Opportunity[] => {
+  const orgs = getFromStorage<Organization[]>(STORAGE_KEYS.ORGANIZATIONS, DEFAULT_ORGANIZATIONS);
+  const users = getFromStorage<User[]>(STORAGE_KEYS.USERS, DEFAULT_USERS);
+  const stages = getFromStorage<Stage[]>(STORAGE_KEYS.STAGES, DEFAULT_STAGES);
+
   let result = [...opps];
 
-  // RBAC 預過濾：AM 只能看自己負責的商機
+  // RBAC 預過濾：
+  // 1) AM 只能看自己負責的商機
   if (role === 'AM') {
     result = result.filter(o => o.userId === userId);
+  } else if (role === 'BU_HEAD') {
+    // 2) BU_HEAD 僅能看自己所屬組織與其子組織的人員商機 (修復 B-4)
+    const me = users.find(u => u.id === userId);
+    if (me?.orgId) {
+      const allowedOrgs = new Set(getSubOrgIds(me.orgId, orgs));
+      const allowedUserIds = new Set(
+        users.filter(u => u.orgId && allowedOrgs.has(u.orgId)).map(u => u.id)
+      );
+      allowedUserIds.add(userId);
+      result = result.filter(o => allowedUserIds.has(o.userId));
+    }
   }
 
   if (!filters) return result;
 
-  // 1. 客戶 Slicer 過濾
+  // 客戶 Slicer 過濾
   if (filters.companyId) {
     result = result.filter(o => o.companyId === filters.companyId);
   }
 
-  // 2. 組織 Slicer 過濾
+  // 組織 Slicer 過濾
   if (filters.orgId && role !== 'AM') {
-    const orgs = getFromStorage<Organization[]>(STORAGE_KEYS.ORGANIZATIONS, DEFAULT_ORGANIZATIONS);
     const targetOrgIds = getSubOrgIds(filters.orgId, orgs);
-    
-    const users = getFromStorage<User[]>(STORAGE_KEYS.USERS, DEFAULT_USERS);
-    // 找出屬於這些組織的使用者 ID 列表
-    const userIdsInOrgs = users.filter(u => u.orgId && targetOrgIds.includes(u.orgId)).map(u => u.id);
-    
+    const userIdsInOrgs = users
+      .filter(u => u.orgId && targetOrgIds.includes(u.orgId))
+      .map(u => u.id);
     result = result.filter(o => userIdsInOrgs.includes(o.userId));
+  }
+
+  // Sales Rep Slicer 過濾
+  if (filters.userId && role !== 'AM') {
+    result = result.filter(o => o.userId === filters.userId);
+  }
+
+  // 月區間 Slicer 過濾
+  if (filters.startMonth || filters.endMonth) {
+    result = result.filter(o =>
+      isOppInMonthRange(o, stages, filters.startMonth, filters.endMonth)
+    );
   }
 
   return result;
@@ -491,6 +727,16 @@ export const db = {
   },
   saveOrganization: async (org: Organization): Promise<Organization> => {
     const list = getFromStorage<Organization[]>(STORAGE_KEYS.ORGANIZATIONS, DEFAULT_ORGANIZATIONS);
+    // 防循環父子保護 (修復 B-3)
+    if (org.parentId) {
+      if (org.parentId === org.id) {
+        throw new Error('不可將組織的父部門設為自己');
+      }
+      const descendants = getDescendantOrgIds(org.id, list);
+      if (descendants.includes(org.parentId)) {
+        throw new Error('不可將組織的父部門設為其下層子部門（會造成循環架構）');
+      }
+    }
     const idx = list.findIndex(o => o.id === org.id);
     if (idx >= 0) {
       list[idx] = org;
@@ -502,15 +748,25 @@ export const db = {
   },
   deleteOrganization: async (id: string): Promise<boolean> => {
     const list = getFromStorage<Organization[]>(STORAGE_KEYS.ORGANIZATIONS, DEFAULT_ORGANIZATIONS);
-    
-    // 子組織連帶解除父關聯 (設為根節點，或禁止刪除)
-    const updated = list.map(o => o.parentId === id ? { ...o, parentId: null } : o).filter(o => o.id !== id);
+    const updated = list
+      .map(o => (o.parentId === id ? { ...o, parentId: null } : o))
+      .filter(o => o.id !== id);
     saveToStorage(STORAGE_KEYS.ORGANIZATIONS, updated);
 
-    // 把屬於該組織的使用者的 orgId 清空
+    // 把屬於該組織的使用者的 orgId 清空，並同步其名下商機 orgId (修復 B-5)
     const users = getFromStorage<User[]>(STORAGE_KEYS.USERS, DEFAULT_USERS);
-    const updatedUsers = users.map(u => u.orgId === id ? { ...u, orgId: null } : u);
+    const affectedUserIds = new Set(users.filter(u => u.orgId === id).map(u => u.id));
+    const updatedUsers = users.map(u => (u.orgId === id ? { ...u, orgId: null } : u));
     saveToStorage(STORAGE_KEYS.USERS, updatedUsers);
+
+    if (affectedUserIds.size > 0) {
+      const opps = getFromStorage<Opportunity[]>(STORAGE_KEYS.OPPORTUNITIES, DEFAULT_OPPORTUNITIES);
+      const syncedOpps = opps.map(o =>
+        affectedUserIds.has(o.userId) ? { ...o, orgId: null } : o
+      );
+      saveToStorage(STORAGE_KEYS.OPPORTUNITIES, syncedOpps);
+      notifyUsersChanged();
+    }
 
     return true;
   },
@@ -529,12 +785,45 @@ export const db = {
       list.push(user);
     }
     saveToStorage(STORAGE_KEYS.USERS, list);
+
+    // 同步該人員所有名下商機的 orgId，避免人員調動部門後殘留過期組織 (修復 B-5)
+    const opps = getFromStorage<Opportunity[]>(STORAGE_KEYS.OPPORTUNITIES, DEFAULT_OPPORTUNITIES);
+    let oppsChanged = false;
+    const syncedOpps = opps.map(o => {
+      if (o.userId === user.id && o.orgId !== user.orgId) {
+        oppsChanged = true;
+        return { ...o, orgId: user.orgId };
+      }
+      return o;
+    });
+    if (oppsChanged) {
+      saveToStorage(STORAGE_KEYS.OPPORTUNITIES, syncedOpps);
+    }
+
+    // 即時通知 AuthContext 刷新角色切換器 (修復 B-1)
+    notifyUsersChanged();
     return user;
   },
   deleteUser: async (id: string): Promise<boolean> => {
     const list = getFromStorage<User[]>(STORAGE_KEYS.USERS, DEFAULT_USERS);
+    const target = list.find(u => u.id === id);
+    if (!target) return false;
+
+    // 防止刪除最後一位系統管理員
+    if (target.role === 'ADMIN' && list.filter(u => u.role === 'ADMIN').length <= 1) {
+      throw new Error('系統至少必須保留一位 ADMIN 管理員帳號');
+    }
+
+    // 防止刪除仍有負責商機的人員（避免孤兒商機 — 修復 B-5）
+    const opps = getFromStorage<Opportunity[]>(STORAGE_KEYS.OPPORTUNITIES, DEFAULT_OPPORTUNITIES);
+    const ownedCount = opps.filter(o => o.userId === id).length;
+    if (ownedCount > 0) {
+      throw new Error(`此人員目前仍負責 ${ownedCount} 筆商機，請先將商機轉交其他業務後再刪除`);
+    }
+
     const filtered = list.filter(u => u.id !== id);
     saveToStorage(STORAGE_KEYS.USERS, filtered);
+    notifyUsersChanged();
     return true;
   },
 
@@ -559,7 +848,6 @@ export const db = {
     const filtered = list.filter(c => c.id !== id);
     saveToStorage(STORAGE_KEYS.COMPANIES, filtered);
 
-    // 連帶刪除該公司的 Contacts 與 Opportunities
     const contacts = getFromStorage<Contact[]>(STORAGE_KEYS.CONTACTS, DEFAULT_CONTACTS);
     saveToStorage(STORAGE_KEYS.CONTACTS, contacts.filter(c => c.companyId !== id));
 
@@ -596,7 +884,7 @@ export const db = {
     return true;
   },
 
-  // Stages (CRUD)
+  // Stages (CRUD with explicit outcome: 'OPEN' | 'WON' | 'LOST' & mandatory WON/LOST lock)
   getStages: async (onlyActive = false): Promise<Stage[]> => {
     initDB();
     let list = getFromStorage<Stage[]>(STORAGE_KEYS.STAGES, DEFAULT_STAGES);
@@ -607,14 +895,36 @@ export const db = {
   },
   saveStage: async (stage: Stage): Promise<Stage> => {
     const list = getFromStorage<Stage[]>(STORAGE_KEYS.STAGES, DEFAULT_STAGES);
-    const idx = list.findIndex(s => s.id === stage.id);
+    const existing = list.find(s => s.id === stage.id);
+    const outcome: StageOutcome = existing?.outcome || stage.outcome || 'OPEN';
+
+    // 強制鎖定 WON / LOST 的贏率與啟用狀態
+    const enforced: Stage = {
+      ...stage,
+      outcome,
+      defaultWinProbability:
+        outcome === 'WON' ? 100 : outcome === 'LOST' ? 0 : Math.max(1, Math.min(99, stage.defaultWinProbability)),
+      isActive: outcome === 'WON' || outcome === 'LOST' ? true : stage.isActive,
+    };
+
+    // 確保至少保留 1 個啟用的 OPEN 階段（總階段至少 3 個）
+    if (outcome === 'OPEN' && !enforced.isActive) {
+      const otherActiveOpen = list.filter(
+        s => s.id !== enforced.id && s.outcome === 'OPEN' && s.isActive
+      );
+      if (otherActiveOpen.length === 0) {
+        throw new Error('管線至少必須保留 1 個啟用的進行中階段（含 BD Won 與 BD Lost 最少 3 階段）');
+      }
+    }
+
+    const idx = list.findIndex(s => s.id === enforced.id);
     if (idx >= 0) {
-      list[idx] = stage;
+      list[idx] = enforced;
     } else {
-      list.push(stage);
+      list.push(enforced);
     }
     saveToStorage(STORAGE_KEYS.STAGES, list);
-    return stage;
+    return enforced;
   },
   saveStages: async (stages: Stage[]): Promise<Stage[]> => {
     saveToStorage(STORAGE_KEYS.STAGES, stages);
@@ -622,6 +932,26 @@ export const db = {
   },
   deleteStage: async (id: string): Promise<boolean> => {
     const list = getFromStorage<Stage[]>(STORAGE_KEYS.STAGES, DEFAULT_STAGES);
+    const target = list.find(s => s.id === id);
+    if (!target) return false;
+
+    if (target.outcome === 'WON' || target.outcome === 'LOST') {
+      throw new Error('BD Won 與 BD Lost 為必要結案階段，不可刪除');
+    }
+
+    const remainingActiveOpen = list.filter(
+      s => s.id !== id && s.outcome === 'OPEN' && s.isActive
+    );
+    if (remainingActiveOpen.length === 0) {
+      throw new Error('管線至少必須保留 1 個進行中階段（含 BD Won 與 BD Lost 最少 3 階段）');
+    }
+
+    const opps = getFromStorage<Opportunity[]>(STORAGE_KEYS.OPPORTUNITIES, DEFAULT_OPPORTUNITIES);
+    const inUse = opps.filter(o => o.stageId === id).length;
+    if (inUse > 0) {
+      throw new Error(`此階段目前仍有 ${inUse} 筆商機，請先移動商機後再刪除`);
+    }
+
     const filtered = list.filter(s => s.id !== id);
     saveToStorage(STORAGE_KEYS.STAGES, filtered);
     return true;
@@ -652,9 +982,9 @@ export const db = {
 
   // Opportunities (CRUD with RBAC & Slicers)
   getOpportunities: async (
-    role: UserRole, 
+    role: UserRole,
     userId: string,
-    filters?: { orgId?: string; companyId?: string }
+    filters?: QueryFilters
   ): Promise<Opportunity[]> => {
     initDB();
     const list = getFromStorage<Opportunity[]>(STORAGE_KEYS.OPPORTUNITIES, DEFAULT_OPPORTUNITIES);
@@ -672,17 +1002,35 @@ export const db = {
       .filter(s => s.isActive)
       .sort((a, b) => a.displayOrder - b.displayOrder);
 
-    // 1. 自動計算 Case Revenue per month
+    const existing = list.find(o => o.id === opp.id);
+
+    // 1. 自動計算 Monthly Deal Revenue
     opp.amount = (opp.monthlyQuantity || 0) * (opp.unitPrice || 0);
 
     // 2. 自動關聯負責 AM 的 orgId
     const amUser = users.find(u => u.id === opp.userId);
     opp.orgId = amUser ? amUser.orgId : null;
 
-    // 3. 新增商機時，若未指定階段，預設設為第一個活躍階段，且自動套用贏率
+    // 3. 新增商機時，若未指定階段，預設設為第一個 OPEN 階段，且自動套用贏率
     if (!opp.stageId && stages.length > 0) {
-      opp.stageId = stages[0].id;
-      opp.winProbability = stages[0].defaultWinProbability;
+      const firstOpen = stages.find(s => s.outcome === 'OPEN') || stages[0];
+      opp.stageId = firstOpen.id;
+      opp.winProbability = firstOpen.defaultWinProbability;
+    }
+
+    // 4. 自動記錄 createdAt / closedAt 時間戳以支援月區間報表
+    const todayStr = new Date().toISOString().slice(0, 10);
+    if (!opp.createdAt) {
+      opp.createdAt = existing?.createdAt || todayStr;
+    }
+    const targetStage = stages.find(s => s.id === opp.stageId);
+    if (targetStage?.outcome === 'WON' || targetStage?.outcome === 'LOST') {
+      opp.winProbability = targetStage.outcome === 'WON' ? 100 : 0;
+      if (!opp.closedAt || (existing && existing.stageId !== opp.stageId)) {
+        opp.closedAt = existing?.stageId === opp.stageId && existing.closedAt ? existing.closedAt : todayStr;
+      }
+    } else {
+      opp.closedAt = undefined;
     }
 
     const idx = list.findIndex(o => o.id === opp.id);
@@ -698,8 +1046,7 @@ export const db = {
     const list = getFromStorage<Opportunity[]>(STORAGE_KEYS.OPPORTUNITIES, DEFAULT_OPPORTUNITIES);
     const filtered = list.filter(o => o.id !== id);
     saveToStorage(STORAGE_KEYS.OPPORTUNITIES, filtered);
-    
-    // 同步刪除活動
+
     const acts = getFromStorage<Activity[]>(STORAGE_KEYS.ACTIVITIES, DEFAULT_ACTIVITIES);
     saveToStorage(STORAGE_KEYS.ACTIVITIES, acts.filter(a => a.opportunityId !== id));
     return true;
@@ -715,21 +1062,20 @@ export const db = {
     return list;
   },
   getPendingTasks: async (
-    userId: string, 
+    userId: string,
     role: UserRole,
-    filters?: { orgId?: string; companyId?: string }
+    filters?: QueryFilters
   ): Promise<Activity[]> => {
     initDB();
     const list = getFromStorage<Activity[]>(STORAGE_KEYS.ACTIVITIES, DEFAULT_ACTIVITIES);
     const opps = getFromStorage<Opportunity[]>(STORAGE_KEYS.OPPORTUNITIES, DEFAULT_OPPORTUNITIES);
-    
-    // 預先過濾商機
     const filteredOppIds = filterOpps(opps, role, userId, filters).map(o => o.id);
-    
-    // 找出待辦任務 (isCompleted: false) 且關聯商機在過濾列表內
-    const tasks = list.filter(a => a.isCompleted === false && filteredOppIds.includes(a.opportunityId));
-    
-    // 依據 dueDate 排序
+    const tasks = list.filter(
+      a =>
+        a.isCompleted === false &&
+        filteredOppIds.includes(a.opportunityId) &&
+        isActivityInMonthRange(a, filters?.startMonth, filters?.endMonth)
+    );
     return tasks.sort((a, b) => a.dueDate.localeCompare(b.dueDate));
   },
   saveActivity: async (act: Activity): Promise<Activity> => {
@@ -752,9 +1098,9 @@ export const db = {
 
   // Analytics Funnel Data (With Slicers)
   getAnalyticsFunnel: async (
-    role: UserRole, 
+    role: UserRole,
     userId: string,
-    filters?: { orgId?: string; companyId?: string }
+    filters?: QueryFilters
   ): Promise<{ stageName: string; amount: number; count: number }[]> => {
     initDB();
     const opps = await db.getOpportunities(role, userId, filters);
@@ -771,63 +1117,107 @@ export const db = {
     });
   },
 
-  // Analytics KPI (With Slicers)
+  // Analytics KPI (Redesigned KPI Suite using explicit Stage.outcome + month range!)
   getAnalyticsKPI: async (
-    role: UserRole, 
+    role: UserRole,
     userId: string,
-    filters?: { orgId?: string; companyId?: string }
+    filters?: QueryFilters
   ): Promise<{
+    totalPotentialAmount: number;
     expectedRevenue: number;
+    bdProgressRate: number;
+    openCount: number;
+    wonCount: number;
+    lostCount: number;
     totalOpportunitiesCount: number;
-    winRate: number;
+    wonAmount: number;
+    lostAmount: number;
+    wonRate: number;
+    closedWinRate: number;
+    activityCompletionRate: number;
     taskCompletionRate: number;
     funnelConversion: number;
   }> => {
     initDB();
     const opps = await db.getOpportunities(role, userId, filters);
-    const oppIds = opps.map(o => o.id);
+    const oppIds = new Set(opps.map(o => o.id));
     const allActivities = getFromStorage<Activity[]>(STORAGE_KEYS.ACTIVITIES, DEFAULT_ACTIVITIES);
-    
-    // 過濾出與篩選後商機關聯的所有任務 (TASK)
-    const userTasks = allActivities.filter(a => oppIds.includes(a.opportunityId));
+    const stages = getFromStorage<Stage[]>(STORAGE_KEYS.STAGES, DEFAULT_STAGES);
 
-    // 動態判定流失階段 (順序最後一個) 與成交階段 (倒數第二個)
-    const activeStages = getFromStorage<Stage[]>(STORAGE_KEYS.STAGES, DEFAULT_STAGES)
-      .filter(s => s.isActive)
-      .sort((a, b) => a.displayOrder - b.displayOrder);
-    const lossStageId = activeStages[activeStages.length - 1]?.id || 'stage-6';
-    const wonStageId = activeStages[activeStages.length - 2]?.id || 'stage-5';
+    const stageMap = new Map(stages.map(s => [s.id, s]));
+    const getOutcome = (stageId: string): StageOutcome => stageMap.get(stageId)?.outcome || 'OPEN';
 
-    // 計算加權預估業績 (跳過動態流失階段)
-    const expectedRevenue = opps.reduce((sum, o) => {
-      if (o.stageId === lossStageId) return sum;
-      return sum + (o.amount * (o.winProbability / 100));
-    }, 0);
+    // 區間內的關聯活動
+    const filteredActivities = allActivities.filter(
+      a =>
+        oppIds.has(a.opportunityId) &&
+        isActivityInMonthRange(a, filters?.startMonth, filters?.endMonth)
+    );
 
-    // 平均贏率
-    const avgWinProbability = opps.length > 0
-      ? opps.reduce((sum, o) => sum + o.winProbability, 0) / opps.length
-      : 0;
+    const openOpps = opps.filter(o => getOutcome(o.stageId) === 'OPEN');
+    const wonOpps = opps.filter(o => getOutcome(o.stageId) === 'WON');
+    const lostOpps = opps.filter(o => getOutcome(o.stageId) === 'LOST');
 
-    // 任務完成率
-    const completedTasks = userTasks.filter(t => t.isCompleted);
-    const taskCompletionRate = userTasks.length > 0
-      ? (completedTasks.length / userTasks.length) * 100
-      : 0;
+    // 全部潛在商機金額（不含 BD Lost）
+    const nonLostOpps = opps.filter(o => getOutcome(o.stageId) !== 'LOST');
+    const totalPotentialAmount = nonLostOpps.reduce((sum, o) => sum + o.amount, 0);
 
-    // 漏斗轉換率 (成交階段為 wonStageId 的商機比例)
-    const wonOpps = opps.filter(o => o.stageId === wonStageId);
-    const funnelConversion = opps.length > 0
-      ? (wonOpps.length / opps.length) * 100
-      : 0;
+    // 加權金額（不含 BD Lost）
+    const expectedRevenue = nonLostOpps.reduce(
+      (sum, o) => sum + o.amount * (o.winProbability / 100),
+      0
+    );
+
+    // BD Progress % = 加權金額 / 全部潛在商機金額 (不含 BD Lost)
+    const bdProgressRate =
+      totalPotentialAmount > 0 ? (expectedRevenue / totalPotentialAmount) * 100 : 0;
+
+    const wonAmount = wonOpps.reduce((sum, o) => sum + o.amount, 0);
+    const lostAmount = lostOpps.reduce((sum, o) => sum + o.amount, 0);
+
+    // BD Won % = BD Won count / total BD count
+    const wonRate = opps.length > 0 ? (wonOpps.length / opps.length) * 100 : 0;
+    const closedTotal = wonOpps.length + lostOpps.length;
+    const closedWinRate = closedTotal > 0 ? (wonOpps.length / closedTotal) * 100 : 0;
+
+    // 活動完成率
+    const completedActs = filteredActivities.filter(a => a.isCompleted);
+    const activityCompletionRate =
+      filteredActivities.length > 0 ? (completedActs.length / filteredActivities.length) * 100 : 0;
 
     return {
+      totalPotentialAmount,
       expectedRevenue,
+      bdProgressRate,
+      openCount: openOpps.length,
+      wonCount: wonOpps.length,
+      lostCount: lostOpps.length,
       totalOpportunitiesCount: opps.length,
-      winRate: avgWinProbability,
-      taskCompletionRate,
-      funnelConversion,
+      wonAmount,
+      lostAmount,
+      wonRate,
+      closedWinRate,
+      activityCompletionRate,
+      taskCompletionRate: activityCompletionRate,
+      funnelConversion: wonRate,
     };
+  },
+
+  // Sales Targets (Monthly Goals for Management Metrics)
+  getSalesTargets: async (): Promise<SalesTarget[]> => {
+    initDB();
+    return getFromStorage<SalesTarget[]>(STORAGE_KEYS.SALES_TARGETS, []);
+  },
+  saveSalesTarget: async (target: SalesTarget): Promise<SalesTarget> => {
+    const list = getFromStorage<SalesTarget[]>(STORAGE_KEYS.SALES_TARGETS, []);
+    const idx = list.findIndex(t => t.month === target.month);
+    if (idx >= 0) {
+      list[idx] = target;
+    } else {
+      list.push(target);
+    }
+    saveToStorage(STORAGE_KEYS.SALES_TARGETS, list);
+    return target;
   },
 
   // Product Lines APIs
@@ -874,5 +1264,5 @@ export const db = {
     const filtered = list.filter(b => b.id !== id);
     saveToStorage(STORAGE_KEYS.BUDGET_ITEMS, filtered);
     return true;
-  }
+  },
 };

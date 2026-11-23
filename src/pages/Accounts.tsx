@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useLayout } from '../context/LayoutContext';
-import { db } from '../services/db';
-import type { Company, Contact, Opportunity, Activity, Stage } from '../services/db';
+import { db, getEligibleSalesReps, getVisibleOrgsForUser } from '../services/db';
+import type { Company, Contact, Opportunity, Activity, Stage, Organization, User } from '../services/db';
 import { exportToCsv } from '../utils/exportCsv';
 import { inferPreviewTags, getTagToneClass } from '../utils/aiTagPreview';
 import {
@@ -17,6 +17,8 @@ import {
   Mail,
   Sparkles,
   CheckCircle2,
+  FolderTree,
+  User as UserIcon,
 } from 'lucide-react';
 
 interface AccountsProps {
@@ -32,6 +34,12 @@ export const Accounts: React.FC<AccountsProps> = ({ setActiveTab }) => {
   const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
   const [activities, setActivities] = useState<Activity[]>([]);
   const [stages, setStages] = useState<Stage[]>([]);
+  const [organizations, setOrganizations] = useState<Organization[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
+
+  // Slicers (Org + Conditional Sales Rep + Search)
+  const [selectedOrgId, setSelectedOrgId] = useState('');
+  const [selectedUserId, setSelectedUserId] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null);
 
@@ -41,12 +49,47 @@ export const Accounts: React.FC<AccountsProps> = ({ setActiveTab }) => {
   const [newContactEmail, setNewContactEmail] = useState('');
 
   useEffect(() => {
+    const loadBase = async () => {
+      const [orgs, usrs] = await Promise.all([db.getOrganizations(), db.getUsers()]);
+      setOrganizations(orgs);
+      setUsers(usrs);
+    };
+    loadBase();
+  }, [dataVersion]);
+
+  const visibleOrgs = useMemo(() => {
+    if (!currentUser) return [];
+    return getVisibleOrgsForUser(organizations, users, currentUser.role, currentUser.id);
+  }, [organizations, users, currentUser]);
+
+  const eligibleReps = useMemo(() => {
+    if (!currentUser) return [];
+    return getEligibleSalesReps(
+      organizations,
+      users,
+      currentUser.role,
+      currentUser.id,
+      selectedOrgId || undefined
+    );
+  }, [organizations, users, currentUser, selectedOrgId]);
+
+  useEffect(() => {
+    if (selectedUserId && !eligibleReps.some(u => u.id === selectedUserId)) {
+      setSelectedUserId('');
+    }
+  }, [eligibleReps, selectedUserId]);
+
+  useEffect(() => {
     if (!currentUser) return;
     const load = async () => {
+      const filters = {
+        orgId: selectedOrgId || undefined,
+        userId: selectedUserId || undefined,
+      };
       const [comps, conts, opps, acts, stgs] = await Promise.all([
         db.getCompanies(),
         db.getContacts(),
-        db.getOpportunities(currentUser.role, currentUser.id),
+        db.getOpportunities(currentUser.role, currentUser.id, filters),
         db.getActivities(),
         db.getStages(true),
       ]);
@@ -60,23 +103,13 @@ export const Accounts: React.FC<AccountsProps> = ({ setActiveTab }) => {
       }
     };
     load();
-  }, [currentUser, dataVersion]);
+  }, [currentUser, selectedOrgId, selectedUserId, dataVersion]);
 
-  const sortedStages = [...stages].sort((a, b) => a.displayOrder - b.displayOrder);
-  const lossStageId = sortedStages.length > 0 ? sortedStages[sortedStages.length - 1].id : 'stage-6';
-
-  const filteredCompanies = companies.filter(
-    c =>
-      c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      c.industry.toLowerCase().includes(searchTerm.toLowerCase())
-  );
-
-  const selectedCompany =
-    filteredCompanies.find(c => c.id === selectedCompanyId) || filteredCompanies[0] || null;
+  const stageMap = useMemo(() => new Map(stages.map(s => [s.id, s])), [stages]);
 
   const getCompanyMetrics = (companyId: string) => {
     const compOpps = opportunities.filter(o => o.companyId === companyId);
-    const activeOpps = compOpps.filter(o => o.stageId !== lossStageId);
+    const activeOpps = compOpps.filter(o => stageMap.get(o.stageId)?.outcome !== 'LOST');
     const totalAmt = activeOpps.reduce((s, o) => s + o.amount, 0);
     const weightedAmt = activeOpps.reduce((s, o) => s + o.amount * (o.winProbability / 100), 0);
     const oppIds = new Set(compOpps.map(o => o.id));
@@ -89,6 +122,40 @@ export const Accounts: React.FC<AccountsProps> = ({ setActiveTab }) => {
       ...compActs.map(a => a.description),
     ]);
     return { compOpps, activeOpps, totalAmt, weightedAmt, compActs, compContacts, tags };
+  };
+
+  // 預設依潛在商機總額由高到低排行
+  const filteredCompanies = companies
+    .filter(
+      c =>
+        c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        c.industry.toLowerCase().includes(searchTerm.toLowerCase())
+    )
+    .sort((a, b) => getCompanyMetrics(b.id).totalAmt - getCompanyMetrics(a.id).totalAmt);
+
+  const selectedCompany =
+    filteredCompanies.find(c => c.id === selectedCompanyId) || filteredCompanies[0] || null;
+
+  const renderOrgOptions = (parentId: string | null, depth = 0, visited = new Set<string>()) => {
+    const visibleIds = new Set(visibleOrgs.map(o => o.id));
+    const list = visibleOrgs.filter(o => {
+      if (visited.has(o.id)) return false;
+      if (parentId === null) return o.parentId === null || !visibleIds.has(o.parentId);
+      return o.parentId === parentId;
+    });
+    return list.map(org => {
+      const nextVisited = new Set(visited);
+      nextVisited.add(org.id);
+      return (
+        <React.Fragment key={org.id}>
+          <option value={org.id} className="bg-white dark:bg-slate-950">
+            {'\u00A0'.repeat(depth * 3)}
+            {org.name}
+          </option>
+          {renderOrgOptions(org.id, depth + 1, nextVisited)}
+        </React.Fragment>
+      );
+    });
   };
 
   const formatCompact = (val: number) =>
@@ -148,6 +215,38 @@ export const Accounts: React.FC<AccountsProps> = ({ setActiveTab }) => {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {currentUser?.role !== 'AM' && (
+            <div className="flex items-center gap-1.5">
+              <FolderTree className={`w-4 h-4 ${theme.accentText}`} />
+              <select
+                value={selectedOrgId}
+                onChange={e => setSelectedOrgId(e.target.value)}
+                className="px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-xs font-semibold text-slate-700 dark:text-slate-200"
+              >
+                <option value="" className="bg-white dark:bg-slate-950">所有部門</option>
+                {renderOrgOptions(null)}
+              </select>
+            </div>
+          )}
+
+          {currentUser?.role !== 'AM' && eligibleReps.length > 0 && (
+            <div className="flex items-center gap-1.5">
+              <UserIcon className={`w-4 h-4 ${theme.accentText}`} />
+              <select
+                value={selectedUserId}
+                onChange={e => setSelectedUserId(e.target.value)}
+                className="px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-xs font-semibold text-slate-700 dark:text-slate-200"
+              >
+                <option value="" className="bg-white dark:bg-slate-950">全部 Sales Rep ({eligibleReps.length})</option>
+                {eligibleReps.map(rep => (
+                  <option key={rep.id} value={rep.id} className="bg-white dark:bg-slate-950">
+                    {rep.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
           <div className="relative">
             <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
             <input
@@ -155,7 +254,7 @@ export const Accounts: React.FC<AccountsProps> = ({ setActiveTab }) => {
               placeholder="搜尋公司名稱或產業..."
               value={searchTerm}
               onChange={e => setSearchTerm(e.target.value)}
-              className="pl-8 pr-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-xs text-slate-800 dark:text-slate-100 w-48 sm:w-56"
+              className="pl-8 pr-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-xs text-slate-800 dark:text-slate-100 w-44 sm:w-52"
             />
           </div>
           <button

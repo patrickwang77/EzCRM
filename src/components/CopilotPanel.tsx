@@ -137,7 +137,7 @@ export const CopilotPanel: React.FC<{ onGoToPipeline?: (companyId: string) => vo
                 </h4>
                 {(() => {
                   const stIdx = stages.findIndex(s => s.id === selectedOpp.stageId);
-                  const stToken = getStageColor(stIdx, stages.length, variant);
+                  const stToken = getStageColor(stIdx, stages.length, variant, stage?.outcome);
                   return (
                     <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[11px] font-bold flex-shrink-0 ${stToken.pillClass}`}>
                       <span className={`w-1.5 h-1.5 rounded-full ${stToken.barBg}`} />

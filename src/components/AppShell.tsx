@@ -24,6 +24,7 @@ import {
   BriefcaseBusiness,
   Sliders,
   Sparkles,
+  BarChart3,
 } from 'lucide-react';
 
 interface AppShellProps {
@@ -73,11 +74,15 @@ export const AppShell: React.FC<AppShellProps> = ({ children, activeTab, setActi
   const menuItems = [
     { id: 'dashboard', name: '分析儀表板', icon: LayoutDashboard, requiresAdmin: false },
     { id: 'pipeline', name: 'BD Pipeline', icon: KanbanSquare, requiresAdmin: false },
-    { id: 'accounts', name: '客戶總覽 360°', icon: BriefcaseBusiness, requiresAdmin: false, isNew: true },
+    { id: 'accounts', name: '客戶總覽 360°', icon: BriefcaseBusiness, requiresAdmin: false },
+    { id: 'metrics', name: '管理指標檢核', icon: BarChart3, requiresAdmin: false, isNew: true },
     { id: 'activities', name: '任務活動歷程', icon: CheckSquare, requiresAdmin: false },
     { id: 'salesSettings', name: '銷售設定', icon: Sliders, requiresAdmin: false },
     { id: 'systemSettings', name: '系統設定', icon: Settings, requiresAdmin: true },
   ];
+
+  // 非 ADMIN 直接隱藏系統設定選單 (修復 B-2)
+  const visibleMenuItems = menuItems.filter(item => !item.requiresAdmin || currentUser?.role === 'ADMIN');
 
   const getRoleBadgeColor = (role?: string) => {
     switch (role) {
@@ -93,7 +98,8 @@ export const AppShell: React.FC<AppShellProps> = ({ children, activeTab, setActi
 
   const handleTabClick = (tabId: string, requiresAdmin: boolean) => {
     if (requiresAdmin && currentUser?.role !== 'ADMIN') {
-      alert('⚠️ 權限不足：只有 ADMIN (林經理) 能夠進入系統設定！');
+      const adminNames = availableUsers.filter(u => u.role === 'ADMIN').map(u => u.name).join('、') || '系統管理員';
+      alert(`⚠️ 權限不足：只有系統管理員（${adminNames}）能夠進入系統設定！`);
       return;
     }
     setActiveTab(tabId);
@@ -218,8 +224,8 @@ export const AppShell: React.FC<AppShellProps> = ({ children, activeTab, setActi
               <div className="px-4 py-2 mt-1 border-t border-slate-100 dark:border-slate-800 text-[11px] text-slate-400 leading-normal">
                 💡 <strong>權限說明：</strong><br />
                 - <strong>ADMIN</strong>：全公司視角 + 系統/銷售設定。<br />
-                - <strong>BU_HEAD</strong>：全公司視角 + 銷售設定。<br />
-                - <strong>AM</strong>：僅個人負責商機與任務 + 客戶維護。
+                - <strong>BU_HEAD</strong>：所屬組織與子部門視角 + 銷售設定。<br />
+                - <strong>AM</strong>：僅個人負責商機與活動 + 客戶維護。
               </div>
             </div>
           </>
@@ -243,12 +249,12 @@ export const AppShell: React.FC<AppShellProps> = ({ children, activeTab, setActi
                   <Building2 className="w-4 h-4" />
                 </div>
                 <span className="font-extrabold text-sm tracking-tight text-slate-800 dark:text-white hidden sm:inline">
-                  Antigravity CRM
+                  EZB2B CRM
                 </span>
               </div>
 
               <nav className="hidden md:flex items-center gap-1 overflow-x-auto">
-                {menuItems.map(item => {
+                {visibleMenuItems.map(item => {
                   const Icon = item.icon;
                   const isLocked = item.requiresAdmin && currentUser?.role !== 'ADMIN';
                   const isActive = activeTab === item.id;
@@ -288,7 +294,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children, activeTab, setActi
           {/* Mobile dropdown nav for Variant B */}
           {isMobileMenuOpen && (
             <div className="md:hidden px-4 pb-3 pt-1 border-t border-slate-100 dark:border-slate-800 flex flex-wrap gap-1.5">
-              {menuItems.map(item => {
+              {visibleMenuItems.map(item => {
                 const Icon = item.icon;
                 const isActive = activeTab === item.id;
                 return (
@@ -329,7 +335,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children, activeTab, setActi
           <div className={`p-1.5 rounded-lg ${theme.badgeBg}`}>
             <Building2 className="w-4 h-4" />
           </div>
-          <span className="font-extrabold text-sm text-slate-800 dark:text-white">Antigravity CRM</span>
+          <span className="font-extrabold text-sm text-slate-800 dark:text-white">EZB2B CRM</span>
         </div>
         <button
           onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
@@ -358,12 +364,12 @@ export const AppShell: React.FC<AppShellProps> = ({ children, activeTab, setActi
                   <Building2 className="w-4 h-4" />
                 </div>
                 <div className="min-w-0">
-                  <h1 className="font-extrabold text-sm tracking-tight text-slate-800 dark:text-white truncate">Antigravity</h1>
-                  <p className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">B2B CRM</p>
+                  <h1 className="font-extrabold text-sm tracking-tight text-slate-800 dark:text-white truncate">EZB2B CRM</h1>
+                  <p className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">Sales Pipeline</p>
                 </div>
               </div>
             ) : (
-              <div className={`p-1.5 rounded-lg ${theme.badgeBg}`} title="Antigravity B2B CRM">
+              <div className={`p-1.5 rounded-lg ${theme.badgeBg}`} title="EZB2B CRM">
                 {variant === 'C' ? <Sparkles className="w-4 h-4" /> : <Building2 className="w-4 h-4" />}
               </div>
             )}
@@ -394,7 +400,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children, activeTab, setActi
 
           {/* Navigation Items */}
           <nav className="p-2.5 space-y-1">
-            {menuItems.map(item => {
+            {visibleMenuItems.map(item => {
               const Icon = item.icon;
               const isLocked = item.requiresAdmin && currentUser?.role !== 'ADMIN';
               const isActive = activeTab === item.id;

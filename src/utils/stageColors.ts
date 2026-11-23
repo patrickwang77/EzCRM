@@ -1,4 +1,5 @@
 import type { LayoutVariant } from '../context/LayoutContext';
+import type { StageOutcome } from '../services/db';
 
 export interface StageColorToken {
   hex: [string, string]; // [gradientStart, gradientEnd] for SVG funnel
@@ -137,10 +138,15 @@ const ACTIVE_PALETTES: Record<LayoutVariant, StageColorToken[]> = {
 export function getStageColor(
   stageIndex: number,
   totalStages: number,
-  variant: LayoutVariant
+  variant: LayoutVariant,
+  outcome?: StageOutcome
 ): StageColorToken {
-  if (totalStages >= 2 && stageIndex === totalStages - 1) return LOSS_TOKEN;
-  if (totalStages >= 2 && stageIndex === totalStages - 2) return WON_TOKEN;
+  if (outcome === 'LOST') return LOSS_TOKEN;
+  if (outcome === 'WON') return WON_TOKEN;
+  if (!outcome) {
+    if (totalStages >= 2 && stageIndex === totalStages - 1) return LOSS_TOKEN;
+    if (totalStages >= 2 && stageIndex === totalStages - 2) return WON_TOKEN;
+  }
   const palette = ACTIVE_PALETTES[variant];
   const safeIdx = stageIndex >= 0 ? stageIndex : 0;
   return palette[safeIdx % palette.length];

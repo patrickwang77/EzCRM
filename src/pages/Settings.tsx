@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useLayout } from '../context/LayoutContext';
-import { db } from '../services/db';
-import type { Stage, User, Organization, Company, Contact, ActivityTypeConfig, ProductLine, BudgetItemConfig } from '../services/db';
+import { db, getDescendantOrgIds, generateId } from '../services/db';
+import type { Stage, StageOutcome, User, Organization, Company, Contact, ActivityTypeConfig, ProductLine, BudgetItemConfig } from '../services/db';
 import { 
   Plus, 
   Trash2, 
@@ -22,8 +22,8 @@ import {
 } from 'lucide-react';
 
 export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'system' }) => {
-  const { currentUser } = useAuth();
-  const { dataVersion } = useLayout();
+  const { currentUser, availableUsers } = useAuth();
+  const { dataVersion, bumpDataVersion, theme } = useLayout();
   const [activeTab, setActiveTab] = useState<'stages' | 'org' | 'users' | 'clients' | 'actTypes' | 'prodLines' | 'budgetItems'>(
     mode === 'sales' ? 'clients' : 'stages'
   );
@@ -39,21 +39,21 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
   const [budgetItems, setBudgetItems] = useState<BudgetItemConfig[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Drag states
+  // Drag states (undefined = not hovering any drop zone; null = hovering unassigned pool)
   const [draggedUserId, setDraggedUserId] = useState<string | null>(null);
-  const [dragOverOrgId, setDragOverOrgId] = useState<string | null>(null);
+  const [dragOverOrgId, setDragOverOrgId] = useState<string | null | undefined>(undefined);
 
   // Common Modals Toggle
   const [modalType, setModalType] = useState<'stage' | 'org' | 'user' | 'company' | 'contact' | 'actType' | 'prodLine' | 'budgetItem' | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
 
   // Form states
-  const [stageForm, setStageForm] = useState({ name: '', displayOrder: '', isActive: true, defaultWinProbability: '50' });
+  const [stageForm, setStageForm] = useState({ name: '', displayOrder: '', isActive: true, defaultWinProbability: '50', outcome: 'OPEN' as StageOutcome });
   const [orgForm, setOrgForm] = useState({ name: '', parentId: '' });
   const [userForm, setUserForm] = useState({ name: '', email: '', role: 'AM' as User['role'], orgId: '' });
   const [companyForm, setCompanyForm] = useState({ name: '', industry: '' });
   const [contactForm, setContactForm] = useState({ name: '', email: '', phone: '', companyId: '' });
-  const [actTypeForm, setActTypeForm] = useState({ name: '', icon: 'CheckSquare', color: 'blue' });
+  const [actTypeForm, setActTypeForm] = useState({ name: '', icon: 'CheckSquare', color: 'blue', unitCost: '' });
   const [productLineForm, setProductLineForm] = useState({ name: '', description: '' });
   const [budgetItemForm, setBudgetItemForm] = useState({ name: '' });
 
@@ -102,10 +102,19 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
     if (type === 'stage') {
       if (id) {
         const item = stages.find(s => s.id === id);
-        if (item) setStageForm({ name: item.name, displayOrder: item.displayOrder.toString(), isActive: item.isActive, defaultWinProbability: item.defaultWinProbability.toString() });
+        if (item) {
+          setStageForm({
+            name: item.name,
+            displayOrder: item.displayOrder.toString(),
+            isActive: item.isActive,
+            defaultWinProbability: item.defaultWinProbability.toString(),
+            outcome: item.outcome || 'OPEN',
+          });
+        }
       } else {
-        const nextOrder = stages.length > 0 ? Math.max(...stages.map(s => s.displayOrder)) + 1 : 1;
-        setStageForm({ name: '', displayOrder: nextOrder.toString(), isActive: true, defaultWinProbability: '50' });
+        const openStages = stages.filter(s => s.outcome === 'OPEN');
+        const nextOrder = openStages.length > 0 ? Math.max(...openStages.map(s => s.displayOrder)) + 1 : 1;
+        setStageForm({ name: '', displayOrder: nextOrder.toString(), isActive: true, defaultWinProbability: '50', outcome: 'OPEN' });
       }
     } else if (type === 'org') {
       if (id) {
@@ -138,9 +147,9 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
     } else if (type === 'actType') {
       if (id) {
         const item = activityTypes.find(a => a.id === id);
-        if (item) setActTypeForm({ name: item.name, icon: item.icon, color: item.color });
+        if (item) setActTypeForm({ name: item.name, icon: item.icon, color: item.color, unitCost: item.unitCost ? String(item.unitCost) : '' });
       } else {
-        setActTypeForm({ name: '', icon: 'CheckSquare', color: 'blue' });
+        setActTypeForm({ name: '', icon: 'CheckSquare', color: 'blue', unitCost: '' });
       }
     } else if (type === 'prodLine') {
       if (id) {
@@ -168,23 +177,24 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
     try {
       if (modalType === 'stage') {
         const item: Stage = {
-          id: editingId || `stage-${Date.now()}`,
+          id: editingId || generateId('stage'),
           name: stageForm.name,
           displayOrder: parseInt(stageForm.displayOrder) || 1,
           isActive: stageForm.isActive,
-          defaultWinProbability: parseInt(stageForm.defaultWinProbability) || 0
+          defaultWinProbability: parseInt(stageForm.defaultWinProbability) || 0,
+          outcome: stageForm.outcome || 'OPEN',
         };
         await db.saveStage(item);
       } else if (modalType === 'org') {
         const item: Organization = {
-          id: editingId || `org-${Date.now()}`,
+          id: editingId || generateId('org'),
           name: orgForm.name,
           parentId: orgForm.parentId || null
         };
         await db.saveOrganization(item);
       } else if (modalType === 'user') {
         const item: User = {
-          id: editingId || `user-${Date.now()}`,
+          id: editingId || generateId('user'),
           name: userForm.name,
           email: userForm.email,
           role: userForm.role,
@@ -193,15 +203,15 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
         await db.saveUser(item);
       } else if (modalType === 'company') {
         const item: Company = {
-          id: editingId || `comp-${Date.now()}`,
+          id: editingId || generateId('comp'),
           name: companyForm.name,
           industry: companyForm.industry,
-          createdAt: editingId ? (companies.find(c => c.id === editingId)?.createdAt || '2026-06-30') : new Date().toISOString().split('T')[0]
+          createdAt: editingId ? (companies.find(c => c.id === editingId)?.createdAt || new Date().toISOString().split('T')[0]) : new Date().toISOString().split('T')[0]
         };
         await db.saveCompany(item);
       } else if (modalType === 'contact') {
         const item: Contact = {
-          id: editingId || `cont-${Date.now()}`,
+          id: editingId || generateId('cont'),
           name: contactForm.name,
           email: contactForm.email,
           phone: contactForm.phone,
@@ -209,31 +219,35 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
         };
         await db.saveContact(item);
       } else if (modalType === 'actType') {
+        const parsedCost = parseFloat(actTypeForm.unitCost);
         const item: ActivityTypeConfig = {
-          id: editingId || `acttype-${Date.now()}`,
+          id: editingId || generateId('acttype'),
           name: actTypeForm.name,
           icon: actTypeForm.icon,
-          color: actTypeForm.color
+          color: actTypeForm.color,
+          unitCost: !Number.isNaN(parsedCost) && parsedCost > 0 ? parsedCost : undefined,
         };
         await db.saveActivityType(item);
       } else if (modalType === 'prodLine') {
         const item: ProductLine = {
-          id: editingId || `prod-${Date.now()}`,
+          id: editingId || generateId('prod'),
           name: productLineForm.name,
           description: productLineForm.description
         };
         await db.saveProductLine(item);
       } else if (modalType === 'budgetItem') {
         const item: BudgetItemConfig = {
-          id: editingId || `budget-${Date.now()}`,
+          id: editingId || generateId('budget'),
           name: budgetItemForm.name
         };
         await db.saveBudgetItem(item);
       }
 
       setModalType(null);
+      bumpDataVersion();
       loadAllData();
-    } catch (err) {
+    } catch (err: any) {
+      alert(err?.message || '儲存失敗，請確認欄位資料');
       console.error('Failed to save settings item', err);
     }
   };
@@ -254,8 +268,10 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
       else if (type === 'prodLine') await db.deleteProductLine(id);
       else if (type === 'budgetItem') await db.deleteBudgetItem(id);
 
+      bumpDataVersion();
       loadAllData();
-    } catch (err) {
+    } catch (err: any) {
+      alert(err?.message || '無法刪除此項目');
       console.error('Failed to delete item', err);
     }
   };
@@ -273,7 +289,7 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
 
   const handleOrgDrop = async (e: React.DragEvent, targetOrgId: string | null) => {
     e.preventDefault();
-    setDragOverOrgId(null);
+    setDragOverOrgId(undefined);
     const userId = e.dataTransfer.getData('text/plain') || draggedUserId;
     if (!userId) return;
 
@@ -281,18 +297,22 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
     if (user && user.orgId !== targetOrgId) {
       const updated: User = { ...user, orgId: targetOrgId };
       await db.saveUser(updated);
+      bumpDataVersion();
       loadAllData();
     }
     setDraggedUserId(null);
   };
 
-  // --- 遞迴渲染組織樹與該層級的使用者 ---
-  const renderOrgTree = (parentId: string | null, depth = 0) => {
-    const currentOrgs = organizations.filter(o => o.parentId === parentId);
+  // --- 遞迴渲染組織樹與該層級的使用者 (含防循環 visited guard) ---
+  const renderOrgTree = (parentId: string | null, depth = 0, visited: Set<string> = new Set()) => {
+    const currentOrgs = organizations.filter(o => o.parentId === parentId && !visited.has(o.id));
+    if (currentOrgs.length === 0) return null;
 
     return (
       <div className="space-y-3 pl-4 border-l border-slate-200 dark:border-slate-800 ml-2">
         {currentOrgs.map((org) => {
+          const nextVisited = new Set(visited);
+          nextVisited.add(org.id);
           const orgUsers = users.filter(u => u.orgId === org.id);
           const isOver = dragOverOrgId === org.id;
 
@@ -302,7 +322,7 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
               {/* 組織節點橫條 (可 Drop 容器) */}
               <div 
                 onDragOver={(e) => handleOrgDragOver(e, org.id)}
-                onDragLeave={() => setDragOverOrgId(null)}
+                onDragLeave={() => setDragOverOrgId(undefined)}
                 onDrop={(e) => handleOrgDrop(e, org.id)}
                 className={`
                   p-3 rounded-xl border flex items-center justify-between transition-all
@@ -357,7 +377,7 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
               </div>
 
               {/* 遞迴子組織 */}
-              {renderOrgTree(org.id, depth + 1)}
+              {renderOrgTree(org.id, depth + 1, nextVisited)}
             </div>
           );
         })}
@@ -368,6 +388,7 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
   // 權限不足提示
   const isAllowed = mode === 'system' ? isAdmin : true;
   if (!isAllowed) {
+    const adminNames = availableUsers.filter(u => u.role === 'ADMIN').map(u => u.name).join('、') || '系統管理員';
     return (
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-12 text-center shadow-sm max-w-xl mx-auto space-y-6">
         <div className="w-16 h-16 bg-rose-50 dark:bg-rose-950/30 text-rose-500 rounded-full flex items-center justify-center mx-auto border border-rose-100 dark:border-rose-900/50">
@@ -377,13 +398,13 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
           <h3 className="text-xl font-extrabold text-slate-800 dark:text-white">權限不足</h3>
           <p className="text-sm text-slate-400 leading-relaxed">
             系統偵測到您目前以 <strong>{currentUser?.name} ({currentUser?.role})</strong> 身份存取此頁面。
-            依據 RBAC 安全規範，<strong>只有 ADMIN (系統管理員 - 林經理) 能夠進入系統設定調整銷售階段與人員配置</strong>。
+            依據 RBAC 安全規範，<strong>只有系統管理員（{adminNames}）能夠進入系統設定調整銷售階段與人員配置</strong>。
           </p>
         </div>
         <div className="pt-4 border-t border-slate-100 dark:border-slate-800">
-          <div className="flex items-center gap-2 justify-center text-xs text-indigo-500 font-semibold bg-indigo-50/50 dark:bg-indigo-950/20 px-4 py-2.5 rounded-2xl border border-indigo-100/50 dark:border-indigo-900/30">
+          <div className={`flex items-center gap-2 justify-center text-xs font-semibold px-4 py-2.5 rounded-2xl border ${theme.accentSoftBg} ${theme.accentText} ${theme.accentBorder}`}>
             <ShieldAlert className="w-4 h-4" />
-            <span>提示：請使用右上角的「模擬角色」切換為「林經理 (Admin)」即可操作。</span>
+            <span>提示：請使用右上角的角色選單切換為 ADMIN 管理員（{adminNames}）即可操作。</span>
           </div>
         </div>
       </div>
@@ -437,8 +458,8 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
               className={`
                 flex items-center gap-2 px-5 py-3 border-b-2 font-bold text-xs uppercase tracking-wider transition-all whitespace-nowrap
                 ${isActive 
-                  ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400 bg-indigo-500/5' 
-                  : 'border-transparent text-slate-400 hover:text-slate-600 hover:border-slate-300 dark:hover:text-slate-355'}
+                  ? `border-current ${theme.accentText} ${theme.accentSoftBg}` 
+                  : 'border-transparent text-slate-400 hover:text-slate-600 hover:border-slate-300 dark:hover:text-slate-200'}
               `}
             >
               <Icon className="w-4 h-4" />
@@ -451,14 +472,16 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
       {/* --- Tab 1: 銷售階段設定 --- */}
       {activeTab === 'stages' && (
         <div className="space-y-4">
-          <div className="flex justify-between items-center">
-            <p className="text-xs text-slate-400">設置商機進度看板的展示階段與各階段贏率。</p>
+          <div className="flex flex-wrap justify-between items-center gap-2">
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              設置商機進度看板的展示階段與贏率。<strong>BD Won (100%)</strong> 與 <strong>BD Lost (0%)</strong> 為必要階段（可改名、贏率固定、不可刪除），至少保留 3 個啟用階段。
+            </p>
             <button
               onClick={() => handleOpenModal('stage')}
-              className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 text-white font-bold text-xs rounded-xl shadow hover:bg-indigo-700 transition"
+              className={`flex items-center gap-1.5 px-4 py-2 font-bold text-xs rounded-xl transition ${theme.primaryBtn}`}
             >
               <Plus className="w-4 h-4" />
-              <span>新增階段</span>
+              <span>新增進行中階段</span>
             </button>
           </div>
           
@@ -468,30 +491,55 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
                 <tr className="bg-slate-50 dark:bg-slate-800/40 border-b border-slate-200 dark:border-slate-800 text-[11px] font-bold text-slate-400 uppercase tracking-wider">
                   <th className="px-6 py-3">順序</th>
                   <th className="px-6 py-3">階段名稱</th>
+                  <th className="px-6 py-3">階段類型 (Outcome)</th>
                   <th className="px-6 py-3">預設贏率</th>
                   <th className="px-6 py-3">啟用狀態</th>
                   <th className="px-6 py-3 text-right">操作</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-xs font-semibold">
-                {stages.sort((a,b) => a.displayOrder - b.displayOrder).map((stage) => (
-                  <tr key={stage.id} className="hover:bg-slate-50/40 dark:hover:bg-slate-850/20">
-                    <td className="px-6 py-4 text-slate-500 font-bold">{stage.displayOrder}</td>
-                    <td className="px-6 py-4 text-slate-800 dark:text-slate-200 font-extrabold">{stage.name}</td>
-                    <td className="px-6 py-4 text-indigo-500 font-bold">{stage.defaultWinProbability}%</td>
-                    <td className="px-6 py-4">
-                      <span className={`px-2 py-0.5 rounded-full font-bold text-[10px] ${stage.isActive ? 'bg-emerald-500/10 text-emerald-500' : 'bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500'}`}>
-                        {stage.isActive ? '已啟用' : '已停用'}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 text-right">
-                      <div className="flex items-center justify-end gap-1.5">
-                        <button onClick={() => handleOpenModal('stage', stage.id)} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded text-slate-400 hover:text-sky-500"><Edit3 className="w-3.5 h-3.5" /></button>
-                        <button onClick={() => handleDelete('stage', stage.id)} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded text-slate-400 hover:text-rose-500"><Trash2 className="w-3.5 h-3.5" /></button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                {[...stages].sort((a,b) => a.displayOrder - b.displayOrder).map((stage) => {
+                  const isTerminal = stage.outcome === 'WON' || stage.outcome === 'LOST';
+                  return (
+                    <tr key={stage.id} className="hover:bg-slate-50/40 dark:hover:bg-slate-800/20">
+                      <td className="px-6 py-4 text-slate-500 font-bold">{stage.displayOrder}</td>
+                      <td className="px-6 py-4 text-slate-800 dark:text-slate-200 font-extrabold">{stage.name}</td>
+                      <td className="px-6 py-4">
+                        {stage.outcome === 'WON' ? (
+                          <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">
+                            WON · 成交鎖定
+                          </span>
+                        ) : stage.outcome === 'LOST' ? (
+                          <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/15 text-rose-600 dark:text-rose-400 border border-rose-500/30">
+                            LOST · 流失鎖定
+                          </span>
+                        ) : (
+                          <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                            OPEN · 自訂進行中
+                          </span>
+                        )}
+                      </td>
+                      <td className={`px-6 py-4 font-bold ${theme.accentText}`}>{stage.defaultWinProbability}%</td>
+                      <td className="px-6 py-4">
+                        <span className={`px-2 py-0.5 rounded-full font-bold text-[10px] ${stage.isActive ? 'bg-emerald-500/10 text-emerald-500' : 'bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500'}`}>
+                          {stage.isActive ? '已啟用' : '已停用'}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 text-right">
+                        <div className="flex items-center justify-end gap-1.5">
+                          <button onClick={() => handleOpenModal('stage', stage.id)} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded text-slate-400 hover:text-sky-500" title="編輯階段"><Edit3 className="w-3.5 h-3.5" /></button>
+                          {isTerminal ? (
+                            <span className="p-1 text-slate-300 dark:text-slate-600 cursor-not-allowed" title="必要結案階段不可刪除">
+                              <Lock className="w-3.5 h-3.5" />
+                            </span>
+                          ) : (
+                            <button onClick={() => handleDelete('stage', stage.id)} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded text-slate-400 hover:text-rose-500" title="刪除階段"><Trash2 className="w-3.5 h-3.5" /></button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -580,6 +628,7 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
             {/* 右側：所有人員池 - 可以拖曳出來分配 (佔 1/3) */}
             <div 
               onDragOver={(e) => handleOrgDragOver(e, null)}
+              onDragLeave={() => setDragOverOrgId(undefined)}
               onDrop={(e) => handleOrgDrop(e, null)}
               className={`
                 bg-white dark:bg-slate-900 border rounded-3xl p-5 shadow-sm space-y-4 flex flex-col justify-between min-h-[400px]
@@ -810,22 +859,26 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
                   <th className="px-6 py-3">類型名稱</th>
                   <th className="px-6 py-3">代表圖示</th>
                   <th className="px-6 py-3">配色樣式</th>
+                  <th className="px-6 py-3">量化單價 (選填)</th>
                   <th className="px-6 py-3 text-right">操作</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-xs font-semibold">
                 {activityTypes.map((type) => (
-                  <tr key={type.id} className="hover:bg-slate-50/40 dark:hover:bg-slate-850/20">
-                    <td className="px-6 py-4 text-slate-850 dark:text-slate-100 font-extrabold">{type.name}</td>
+                  <tr key={type.id} className="hover:bg-slate-50/40 dark:hover:bg-slate-800/20">
+                    <td className="px-6 py-4 text-slate-800 dark:text-slate-100 font-extrabold">{type.name}</td>
                     <td className="px-6 py-4">
-                      <span className="bg-slate-100 dark:bg-slate-850 px-3 py-1 rounded-xl text-slate-600 dark:text-slate-350 text-[11px] font-mono">
+                      <span className="bg-slate-100 dark:bg-slate-800 px-3 py-1 rounded-xl text-slate-600 dark:text-slate-300 text-[11px] font-mono">
                         {type.icon}
                       </span>
                     </td>
                     <td className="px-6 py-4">
-                      <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-${type.color}-500/10 text-${type.color}-500`}>
+                      <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
                         {type.color}
                       </span>
+                    </td>
+                    <td className="px-6 py-4 font-mono text-slate-600 dark:text-slate-300">
+                      {type.unitCost ? `NT$ ${type.unitCost.toLocaleString()}` : '未設定'}
                     </td>
                     <td className="px-6 py-4 text-right">
                       <div className="flex items-center justify-end gap-1.5">
@@ -954,71 +1007,84 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
             <form onSubmit={handleSave} className="space-y-4">
               
               {/* Form 1: Stage */}
-              {modalType === 'stage' && (
-                <>
-                  <div>
-                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">階段名稱 *</label>
-                    <input
-                      type="text" required value={stageForm.name}
-                      onChange={(e) => setStageForm({ ...stageForm, name: e.target.value })}
-                      className="w-full px-4 py-2 border border-slate-200 dark:border-slate-800 rounded-xl bg-slate-50 dark:bg-slate-950 text-sm focus:ring-2"
-                    />
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
+              {modalType === 'stage' && (() => {
+                const isTerminal = stageForm.outcome === 'WON' || stageForm.outcome === 'LOST';
+                return (
+                  <>
                     <div>
-                      <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">顯示順序 *</label>
+                      <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">階段名稱 *</label>
                       <input
-                        type="number" required value={stageForm.displayOrder}
-                        onChange={(e) => setStageForm({ ...stageForm, displayOrder: e.target.value })}
-                        className="w-full px-4 py-2 border border-slate-200 dark:border-slate-800 rounded-xl bg-slate-50 dark:bg-slate-950 text-sm focus:ring-2"
+                        type="text" required value={stageForm.name}
+                        onChange={(e) => setStageForm({ ...stageForm, name: e.target.value })}
+                        className="w-full px-4 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100 text-sm focus:ring-2"
                       />
                     </div>
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">預設贏率 (0-100%) *</label>
-                      <input
-                        type="number" required min="0" max="100" value={stageForm.defaultWinProbability}
-                        onChange={(e) => setStageForm({ ...stageForm, defaultWinProbability: e.target.value })}
-                        className="w-full px-4 py-2 border border-slate-200 dark:border-slate-800 rounded-xl bg-slate-50 dark:bg-slate-950 text-sm focus:ring-2"
-                      />
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">顯示順序 *</label>
+                        <input
+                          type="number" required value={stageForm.displayOrder}
+                          onChange={(e) => setStageForm({ ...stageForm, displayOrder: e.target.value })}
+                          className="w-full px-4 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100 text-sm focus:ring-2"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">
+                          預設贏率 {isTerminal ? '(系統鎖定)' : '(1-99%) *'}
+                        </label>
+                        <input
+                          type="number" required min={isTerminal ? 0 : 1} max={isTerminal ? 100 : 99}
+                          disabled={isTerminal}
+                          value={stageForm.defaultWinProbability}
+                          onChange={(e) => setStageForm({ ...stageForm, defaultWinProbability: e.target.value })}
+                          className="w-full px-4 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100 text-sm disabled:opacity-60"
+                        />
+                      </div>
                     </div>
-                  </div>
-                  <div className="flex items-center gap-2 pt-2">
-                    <input
-                      type="checkbox" id="stageIsActive" checked={stageForm.isActive}
-                      onChange={(e) => setStageForm({ ...stageForm, isActive: e.target.checked })}
-                      className="w-4.5 h-4.5 rounded"
-                    />
-                    <label htmlFor="stageIsActive" className="text-xs font-semibold text-slate-750 dark:text-slate-350 cursor-pointer">啟用此階段</label>
-                  </div>
-                </>
-              )}
+                    <div className="flex items-center gap-2 pt-2">
+                      <input
+                        type="checkbox" id="stageIsActive" checked={stageForm.isActive}
+                        disabled={isTerminal}
+                        onChange={(e) => setStageForm({ ...stageForm, isActive: e.target.checked })}
+                        className="w-4 h-4 rounded disabled:opacity-60"
+                      />
+                      <label htmlFor="stageIsActive" className="text-xs font-semibold text-slate-700 dark:text-slate-300 cursor-pointer">
+                        {isTerminal ? '必要結案階段（固定啟用）' : '啟用此階段'}
+                      </label>
+                    </div>
+                  </>
+                );
+              })()}
 
-              {/* Form 2: Org */}
-              {modalType === 'org' && (
-                <>
-                  <div>
-                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">組織/部門名稱 *</label>
-                    <input
-                      type="text" required placeholder="如: 銷售一組" value={orgForm.name}
-                      onChange={(e) => setOrgForm({ ...orgForm, name: e.target.value })}
-                      className="w-full px-4 py-2 border border-slate-200 dark:border-slate-800 rounded-xl bg-slate-50 dark:bg-slate-950 text-sm focus:ring-2"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">父部門 (複層指派)</label>
-                    <select
-                      value={orgForm.parentId}
-                      onChange={(e) => setOrgForm({ ...orgForm, parentId: e.target.value })}
-                      className="w-full px-4 py-2 border border-slate-200 dark:border-slate-800 rounded-xl bg-slate-50 dark:bg-slate-950 text-sm focus:ring-2"
-                    >
-                      <option value="">無 (設定為最上層總公司)</option>
-                      {organizations.filter(o => o.id !== editingId).map(o => (
-                        <option key={o.id} value={o.id}>{o.name}</option>
-                      ))}
-                    </select>
-                  </div>
-                </>
-              )}
+              {/* Form 2: Org (排除自身與所有後代以防止循環架構 — 修復 B-3) */}
+              {modalType === 'org' && (() => {
+                const blockedIds = editingId ? new Set([editingId, ...getDescendantOrgIds(editingId, organizations)]) : new Set<string>();
+                return (
+                  <>
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">組織/部門名稱 *</label>
+                      <input
+                        type="text" required placeholder="如: 銷售一組" value={orgForm.name}
+                        onChange={(e) => setOrgForm({ ...orgForm, name: e.target.value })}
+                        className="w-full px-4 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100 text-sm focus:ring-2"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">父部門 (複層指派)</label>
+                      <select
+                        value={orgForm.parentId}
+                        onChange={(e) => setOrgForm({ ...orgForm, parentId: e.target.value })}
+                        className="w-full px-4 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100 text-sm focus:ring-2"
+                      >
+                        <option value="" className="bg-white dark:bg-slate-950">無 (設定為最上層總公司)</option>
+                        {organizations.filter(o => !blockedIds.has(o.id)).map(o => (
+                          <option key={o.id} value={o.id} className="bg-white dark:bg-slate-950">{o.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </>
+                );
+              })()}
 
               {/* Form 3: User */}
               {modalType === 'user' && (
@@ -1169,7 +1235,7 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
                       <select
                         value={actTypeForm.color}
                         onChange={(e) => setActTypeForm({ ...actTypeForm, color: e.target.value })}
-                        className="w-full px-4 py-2 border border-slate-200 dark:border-slate-800 rounded-xl bg-slate-50 dark:bg-slate-950 text-sm focus:ring-2"
+                        className="w-full px-4 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100 text-sm focus:ring-2"
                       >
                         <option value="blue">Blue (天空藍)</option>
                         <option value="purple">Purple (神秘紫)</option>
@@ -1178,6 +1244,15 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
                         <option value="rose">Rose (玫瑰紅)</option>
                       </select>
                     </div>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">單次量化單價 / 成本 (NTD，選填)</label>
+                    <input
+                      type="number" min="0" placeholder="如: 1500（供管理指標頁乘上活動次數）"
+                      value={actTypeForm.unitCost}
+                      onChange={(e) => setActTypeForm({ ...actTypeForm, unitCost: e.target.value })}
+                      className="w-full px-4 py-2 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100 text-sm focus:ring-2"
+                    />
                   </div>
                 </>
               )}

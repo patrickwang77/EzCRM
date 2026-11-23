@@ -1,8 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useLayout } from '../context/LayoutContext';
-import { db } from '../services/db';
-import type { Company, Organization } from '../services/db';
+import {
+  db,
+  getEligibleSalesReps,
+  getVisibleOrgsForUser,
+  isActivityInMonthRange,
+} from '../services/db';
+import type { Company, Organization, User, StageOutcome } from '../services/db';
 import { exportToCsv } from '../utils/exportCsv';
 import { inferPreviewTags } from '../utils/aiTagPreview';
 import { getStageColor } from '../utils/stageColors';
@@ -18,29 +23,44 @@ import {
   Download,
   Sparkles,
   X,
+  User as UserIcon,
+  CalendarRange,
 } from 'lucide-react';
 
 interface KPIData {
+  totalPotentialAmount: number;
   expectedRevenue: number;
+  bdProgressRate: number;
+  openCount: number;
+  wonCount: number;
+  lostCount: number;
   totalOpportunitiesCount: number;
-  winRate: number;
+  wonAmount: number;
+  lostAmount: number;
+  wonRate: number;
+  closedWinRate: number;
+  activityCompletionRate: number;
   taskCompletionRate: number;
   funnelConversion: number;
 }
 
 interface FunnelData {
   stageName: string;
+  outcome: StageOutcome;
   originalAmount: number;
   weightedAmount: number;
   count: number;
 }
 
 interface SalesPerformance {
+  userId: string;
   userName: string;
   role: string;
   totalAmount: number;
   expectedAmount: number;
-  oppCount: number;
+  progressRate: number;
+  openCount: number;
+  wonCount: number;
 }
 
 interface DashboardProps {
@@ -53,36 +73,64 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
 
   // Slicers State
   const [selectedOrgId, setSelectedOrgId] = useState<string>('');
+  const [selectedUserId, setSelectedUserId] = useState<string>('');
   const [selectedCompanyId, setSelectedCompanyId] = useState<string>('');
+  const [startMonth, setStartMonth] = useState<string>('');
+  const [endMonth, setEndMonth] = useState<string>('');
 
   // Dropdown options
   const [companies, setCompanies] = useState<Company[]>([]);
   const [organizations, setOrganizations] = useState<Organization[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
 
   // Analytics States
   const [kpis, setKpis] = useState<KPIData | null>(null);
   const [funnelData, setFunnelData] = useState<FunnelData[]>([]);
   const [salesPerf, setSalesPerf] = useState<SalesPerformance[]>([]);
   const [loading, setLoading] = useState(true);
-  const [wonAmount, setWonAmount] = useState(0);
-  const [lossAmount, setLossAmount] = useState(0);
   const [pendingTasksCount, setPendingTasksCount] = useState(0);
   const [highProbCount, setHighProbCount] = useState(0);
   const [riskSignals, setRiskSignals] = useState<string[]>([]);
   const [funnelViewMode, setFunnelViewMode] = useState<'weighted' | 'count'>('weighted');
   const [showFocusStrip, setShowFocusStrip] = useState(true);
 
-  // Load Slicer Options
   useEffect(() => {
     const loadOptions = async () => {
-      const [compRes, orgRes] = await Promise.all([db.getCompanies(), db.getOrganizations()]);
+      const [compRes, orgRes, usrRes] = await Promise.all([
+        db.getCompanies(),
+        db.getOrganizations(),
+        db.getUsers(),
+      ]);
       setCompanies(compRes);
       setOrganizations(orgRes);
+      setUsers(usrRes);
     };
     loadOptions();
   }, [dataVersion]);
 
-  // Load Dashboard Data based on Slicers
+  const visibleOrgs = useMemo(() => {
+    if (!currentUser) return [];
+    return getVisibleOrgsForUser(organizations, users, currentUser.role, currentUser.id);
+  }, [organizations, users, currentUser]);
+
+  const eligibleReps = useMemo(() => {
+    if (!currentUser) return [];
+    return getEligibleSalesReps(
+      organizations,
+      users,
+      currentUser.role,
+      currentUser.id,
+      selectedOrgId || undefined
+    );
+  }, [organizations, users, currentUser, selectedOrgId]);
+
+  // 若切換部門導致已選業務不在該部門下階，自動清空
+  useEffect(() => {
+    if (selectedUserId && !eligibleReps.some(u => u.id === selectedUserId)) {
+      setSelectedUserId('');
+    }
+  }, [eligibleReps, selectedUserId]);
+
   useEffect(() => {
     const loadDashboardData = async () => {
       if (!currentUser) return;
@@ -90,47 +138,55 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
         setLoading(true);
         const filters = {
           orgId: selectedOrgId || undefined,
+          userId: selectedUserId || undefined,
           companyId: selectedCompanyId || undefined,
+          startMonth: startMonth || undefined,
+          endMonth: endMonth || undefined,
         };
 
-        const [kpiRes, opps, stages, allActs] = await Promise.all([
+        const [kpiRes, opps, stages, allActs, allUsers] = await Promise.all([
           db.getAnalyticsKPI(currentUser.role, currentUser.id, filters),
           db.getOpportunities(currentUser.role, currentUser.id, filters),
           db.getStages(true),
           db.getActivities(),
+          db.getUsers(),
         ]);
 
         setKpis(kpiRes);
 
         const sortedStages = [...stages].sort((a, b) => a.displayOrder - b.displayOrder);
-        const lossStageId = sortedStages.length > 0 ? sortedStages[sortedStages.length - 1].id : 'stage-6';
-        const wonStageId = sortedStages.length >= 2 ? sortedStages[sortedStages.length - 2].id : 'stage-5';
+        const stageMap = new Map(sortedStages.map(s => [s.id, s]));
 
-        const funnelRes = sortedStages.map(stage => {
+        const funnelRes: FunnelData[] = sortedStages.map(stage => {
           const stageOpps = opps.filter(o => o.stageId === stage.id);
           const originalAmount = stageOpps.reduce((sum, o) => sum + o.amount, 0);
-          const weightedAmount = stageOpps.reduce((sum, o) => sum + o.amount * (o.winProbability / 100), 0);
+          const weightedAmount = stageOpps.reduce(
+            (sum, o) => sum + (stage.outcome === 'LOST' ? 0 : o.amount * (o.winProbability / 100)),
+            0
+          );
           return {
             stageName: stage.name,
+            outcome: stage.outcome,
             originalAmount,
             weightedAmount,
             count: stageOpps.length,
           };
         });
-
-        setWonAmount(opps.filter(o => o.stageId === wonStageId).reduce((sum, o) => sum + o.amount, 0));
-        setLossAmount(opps.filter(o => o.stageId === lossStageId).reduce((sum, o) => sum + o.amount, 0));
         setFunnelData(funnelRes);
 
         // Live focus & AI preview signals
         const oppIds = new Set(opps.map(o => o.id));
-        const relevantActs = allActs.filter(a => oppIds.has(a.opportunityId));
+        const relevantActs = allActs.filter(
+          a => oppIds.has(a.opportunityId) && isActivityInMonthRange(a, filters.startMonth, filters.endMonth)
+        );
         setPendingTasksCount(relevantActs.filter(a => !a.isCompleted).length);
-        setHighProbCount(opps.filter(o => o.stageId !== wonStageId && o.stageId !== lossStageId && o.winProbability >= 50).length);
+        setHighProbCount(
+          opps.filter(o => stageMap.get(o.stageId)?.outcome === 'OPEN' && o.winProbability >= 50).length
+        );
 
         const detected: string[] = [];
         for (const opp of opps) {
-          if (opp.stageId === lossStageId) continue;
+          if (stageMap.get(opp.stageId)?.outcome === 'LOST') continue;
           const oActs = relevantActs.filter(a => a.opportunityId === opp.id).map(a => a.description);
           const tags = inferPreviewTags([opp.title, ...oActs], opp.tags);
           const riskTag = tags.find(t => t.tone === 'risk' || t.tone === 'warn');
@@ -142,24 +198,33 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
         setRiskSignals(detected);
 
         if (currentUser.role === 'ADMIN' || currentUser.role === 'BU_HEAD') {
-          const [allOpps, allUsers] = await Promise.all([
-            db.getOpportunities('ADMIN', '', filters),
-            db.getUsers(),
-          ]);
-          const perf = allUsers
-            .filter(u => u.role === 'AM')
+          const perfUsers = allUsers.filter(u =>
+            eligibleReps.length > 0 ? eligibleReps.some(e => e.id === u.id) : u.role === 'AM'
+          );
+          const perf: SalesPerformance[] = perfUsers
             .map(u => {
-              const userOpps = allOpps.filter(o => o.userId === u.id && o.stageId !== lossStageId);
+              const userOpps = opps.filter(
+                o => o.userId === u.id && stageMap.get(o.stageId)?.outcome !== 'LOST'
+              );
               const totalAmount = userOpps.reduce((sum, o) => sum + o.amount, 0);
-              const expectedAmount = userOpps.reduce((sum, o) => sum + o.amount * (o.winProbability / 100), 0);
+              const expectedAmount = userOpps.reduce(
+                (sum, o) => sum + o.amount * (o.winProbability / 100),
+                0
+              );
+              const openCount = userOpps.filter(o => stageMap.get(o.stageId)?.outcome === 'OPEN').length;
+              const wonCount = userOpps.filter(o => stageMap.get(o.stageId)?.outcome === 'WON').length;
               return {
+                userId: u.id,
                 userName: u.name,
                 role: u.role,
                 totalAmount,
                 expectedAmount,
-                oppCount: userOpps.length,
+                progressRate: totalAmount > 0 ? (expectedAmount / totalAmount) * 100 : 0,
+                openCount,
+                wonCount,
               };
             })
+            .filter(p => p.openCount + p.wonCount > 0)
             .sort((a, b) => b.expectedAmount - a.expectedAmount);
           setSalesPerf(perf);
         }
@@ -171,7 +236,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
     };
 
     loadDashboardData();
-  }, [currentUser, selectedOrgId, selectedCompanyId, dataVersion]);
+  }, [currentUser, selectedOrgId, selectedUserId, selectedCompanyId, startMonth, endMonth, dataVersion, eligibleReps]);
 
   const formatCurrency = (value: number) =>
     new Intl.NumberFormat('zh-TW', {
@@ -183,26 +248,61 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
   const formatCompactCurrency = (value: number) =>
     value >= 10000 ? `${(value / 10000).toFixed(0)} 萬` : `${value}`;
 
-  const renderOrgOptions = (parentId: string | null, depth = 0) => {
-    const list = organizations.filter(o => o.parentId === parentId);
-    return list.map(org => (
-      <React.Fragment key={org.id}>
-        <option value={org.id} className="bg-white dark:bg-slate-950">
-          {'\u00A0'.repeat(depth * 3)}
-          {org.name}
-        </option>
-        {renderOrgOptions(org.id, depth + 1)}
-      </React.Fragment>
-    ));
+  const renderOrgOptions = (parentId: string | null, depth = 0, visited = new Set<string>()) => {
+    const visibleIds = new Set(visibleOrgs.map(o => o.id));
+    const list = visibleOrgs.filter(o => {
+      if (visited.has(o.id)) return false;
+      if (parentId === null) {
+        return o.parentId === null || !visibleIds.has(o.parentId);
+      }
+      return o.parentId === parentId;
+    });
+    return list.map(org => {
+      const nextVisited = new Set(visited);
+      nextVisited.add(org.id);
+      return (
+        <React.Fragment key={org.id}>
+          <option value={org.id} className="bg-white dark:bg-slate-950">
+            {'\u00A0'.repeat(depth * 3)}
+            {org.name}
+          </option>
+          {renderOrgOptions(org.id, depth + 1, nextVisited)}
+        </React.Fragment>
+      );
+    });
+  };
+
+  const applyMonthPreset = (preset: 'all' | 'thisMonth' | 'thisQuarter') => {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = now.getMonth() + 1;
+    if (preset === 'all') {
+      setStartMonth('');
+      setEndMonth('');
+    } else if (preset === 'thisMonth') {
+      const ym = `${y}-${String(m).padStart(2, '0')}`;
+      setStartMonth(ym);
+      setEndMonth(ym);
+    } else {
+      const qStartM = Math.floor((m - 1) / 3) * 3 + 1;
+      const qEndM = qStartM + 2;
+      setStartMonth(`${y}-${String(qStartM).padStart(2, '0')}`);
+      setEndMonth(`${y}-${String(qEndM).padStart(2, '0')}`);
+    }
   };
 
   const handleExportReport = () => {
-    const headers = ['銷售階段', '商機個數', '原始預估金額(NTD)', '加權預估金額(NTD)'];
-    const rows = funnelData.map(d => [d.stageName, d.count, d.originalAmount, Math.round(d.weightedAmount)]);
-    exportToCsv(`CRM_銷售漏斗分析_${new Date().toISOString().slice(0, 10)}.csv`, headers, rows);
+    const headers = ['銷售階段', '階段類型', '商機個數', '原始預估金額(NTD)', '加權預估金額(NTD)'];
+    const rows = funnelData.map(d => [
+      d.stageName,
+      d.outcome,
+      d.count,
+      d.originalAmount,
+      Math.round(d.weightedAmount),
+    ]);
+    exportToCsv(`EZB2B_銷售漏斗分析_${new Date().toISOString().slice(0, 10)}.csv`, headers, rows);
   };
 
-  // --- SVG Funnel Chart Rendering (Harmonized Palette by Variant) ---
   const renderSVGFunnel = () => {
     if (funnelData.length === 0) return null;
 
@@ -222,7 +322,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
         maxOriginalAmount > 0 ? (d.weightedAmount / maxOriginalAmount) * (chartWidth * 0.85) : 0;
       const countWidth = maxCount > 0 ? (d.count / maxCount) * (chartWidth * 0.85) : 0;
       const y = i * rowHeight + (rowHeight - barHeight) / 2;
-      const token = getStageColor(i, stageCount, variant);
+      const token = getStageColor(i, stageCount, variant, d.outcome);
 
       return {
         id: i,
@@ -249,7 +349,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
           >
             <defs>
               {funnelBars.map((bar, idx) => (
-                <linearGradient key={`grad-${variant}-${idx}`} id={`grad-${variant}-${idx}`} x1="0%" y1="0%" x2="100%" y2="100%">
+                <linearGradient
+                  key={`grad-${variant}-${idx}`}
+                  id={`grad-${variant}-${idx}`}
+                  x1="0%"
+                  y1="0%"
+                  x2="100%"
+                  y2="100%"
+                >
                   <stop offset="0%" stopColor={bar.color[0]} />
                   <stop offset="100%" stopColor={bar.color[1]} />
                 </linearGradient>
@@ -349,17 +456,19 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
     );
   }
 
+  const hasAnyFilter = Boolean(selectedOrgId || selectedUserId || selectedCompanyId || startMonth || endMonth);
+
   return (
     <div className="space-y-5">
-      {/* Variant B: 44px Dismissible Daily Focus Strip (Replaces giant 180px Welcome Banner) */}
-      {variant === 'B' && showFocusStrip && (
+      {/* Variant A & B: 44px Dismissible Daily Focus Strip (需求 #8：將 B 的每日焦點加入 A!) */}
+      {(variant === 'A' || variant === 'B') && showFocusStrip && (
         <div className={`rounded-xl px-4 py-2.5 border flex flex-wrap items-center justify-between gap-2 text-xs ${theme.accentSoftBg} ${theme.accentBorder}`}>
           <div className="flex flex-wrap items-center gap-2 text-slate-700 dark:text-slate-200">
             <span className={`font-extrabold inline-flex items-center gap-1 ${theme.accentText}`}>
               <Sparkles className="w-3.5 h-3.5" /> 今日焦點
             </span>
             <span>
-              {currentUser?.name?.split(' ')[0]}，目前有 <strong>{pendingTasksCount} 項待辦任務</strong> 與{' '}
+              {currentUser?.name?.split(' ')[0]}，目前有 <strong>{pendingTasksCount} 項待辦活動</strong> 與{' '}
               <strong>{highProbCount} 筆高贏率商機 (≥50%)</strong> 持續推進中。
             </span>
           </div>
@@ -403,16 +512,62 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
         </div>
       )}
 
-      {/* Compact Utility Slicer & Export Bar (No giant welcome hero!) */}
+      {/* Compact Utility Slicer Bar: Month Range + Org + Conditional Sales Rep + Company + Export */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl px-4 py-3 flex flex-wrap items-center justify-between gap-3 shadow-xs">
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2.5">
+          {/* Month Range Picker (#2) */}
+          <div className="flex items-center gap-1.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-xl px-2.5 py-1 text-xs">
+            <CalendarRange className={`w-3.5 h-3.5 flex-shrink-0 ${theme.accentText}`} />
+            <input
+              type="month"
+              value={startMonth}
+              onChange={e => setStartMonth(e.target.value)}
+              className="bg-transparent text-slate-700 dark:text-slate-200 font-semibold outline-none w-[112px]"
+              title="開始月份（含區間新建、區間結案與尚未結案舊案）"
+            />
+            <span className="text-slate-400">~</span>
+            <input
+              type="month"
+              value={endMonth}
+              onChange={e => setEndMonth(e.target.value)}
+              className="bg-transparent text-slate-700 dark:text-slate-200 font-semibold outline-none w-[112px]"
+              title="結束月份"
+            />
+            <div className="hidden sm:flex items-center gap-1 ml-1 pl-1.5 border-l border-slate-200 dark:border-slate-700">
+              <button
+                type="button"
+                onClick={() => applyMonthPreset('thisMonth')}
+                className="px-1.5 py-0.5 rounded hover:bg-slate-200 dark:hover:bg-slate-800 text-[10px] font-bold text-slate-500 dark:text-slate-400"
+              >
+                本月
+              </button>
+              <button
+                type="button"
+                onClick={() => applyMonthPreset('thisQuarter')}
+                className="px-1.5 py-0.5 rounded hover:bg-slate-200 dark:hover:bg-slate-800 text-[10px] font-bold text-slate-500 dark:text-slate-400"
+              >
+                本季
+              </button>
+              {(startMonth || endMonth) && (
+                <button
+                  type="button"
+                  onClick={() => applyMonthPreset('all')}
+                  className="px-1.5 py-0.5 rounded hover:bg-slate-200 dark:hover:bg-slate-800 text-[10px] font-bold text-rose-500"
+                >
+                  全部
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Org Slicer */}
           {currentUser?.role !== 'AM' && (
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5">
               <FolderTree className={`w-4 h-4 ${theme.accentText}`} />
               <select
                 value={selectedOrgId}
                 onChange={e => setSelectedOrgId(e.target.value)}
-                className="px-3 py-1.5 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-semibold"
+                className="px-2.5 py-1.5 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-semibold"
               >
                 <option value="" className="bg-white dark:bg-slate-950">全部組織部門</option>
                 {renderOrgOptions(null)}
@@ -420,12 +575,32 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
             </div>
           )}
 
-          <div className="flex items-center gap-2">
+          {/* Conditional Sales Rep Slicer (#6: 僅在組織下階有人員時生效) */}
+          {currentUser?.role !== 'AM' && eligibleReps.length > 0 && (
+            <div className="flex items-center gap-1.5">
+              <UserIcon className={`w-4 h-4 ${theme.accentText}`} />
+              <select
+                value={selectedUserId}
+                onChange={e => setSelectedUserId(e.target.value)}
+                className="px-2.5 py-1.5 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-semibold"
+              >
+                <option value="" className="bg-white dark:bg-slate-950">全部 Sales Rep ({eligibleReps.length})</option>
+                {eligibleReps.map(rep => (
+                  <option key={rep.id} value={rep.id} className="bg-white dark:bg-slate-950">
+                    {rep.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {/* Company Slicer */}
+          <div className="flex items-center gap-1.5">
             <Building2 className={`w-4 h-4 ${theme.accentText}`} />
             <select
               value={selectedCompanyId}
               onChange={e => setSelectedCompanyId(e.target.value)}
-              className="px-3 py-1.5 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-semibold"
+              className="px-2.5 py-1.5 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-semibold"
             >
               <option value="" className="bg-white dark:bg-slate-950">全部客戶公司</option>
               {companies.map(c => (
@@ -436,11 +611,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
             </select>
           </div>
 
-          {(selectedOrgId || selectedCompanyId) && (
+          {hasAnyFilter && (
             <button
               onClick={() => {
                 setSelectedOrgId('');
+                setSelectedUserId('');
                 setSelectedCompanyId('');
+                setStartMonth('');
+                setEndMonth('');
               }}
               className="px-2.5 py-1.5 text-xs font-bold text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900 rounded-xl"
             >
@@ -458,49 +636,69 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
         </button>
       </div>
 
-      {/* KPI 卡片 */}
+      {/* 4 Redesigned KPI Cards (需求 #1) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs">
+        {/* KPI 1: 全部潛在商機 + BD Progress % */}
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs flex flex-col justify-between min-h-[144px]">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-slate-500 dark:text-slate-400">加權預估業績</span>
+            <span className="text-xs font-bold text-slate-500 dark:text-slate-400">全部潛在商機</span>
             <div className="p-2 bg-emerald-50 dark:bg-emerald-950/30 rounded-xl border border-emerald-100 dark:border-emerald-900/50">
               <DollarSign className="w-4 h-4 text-emerald-500" />
             </div>
           </div>
-          <div className="mt-3">
+          <div className="mt-2">
             <h3 className="text-2xl font-extrabold text-slate-800 dark:text-white tracking-tight">
-              {formatCurrency(kpis.expectedRevenue)}
+              {formatCurrency(kpis.totalPotentialAmount)}
             </h3>
-            <p className="text-xs text-slate-400 mt-1 flex items-center gap-1">
-              <span className="text-emerald-500 font-bold flex items-center">
-                <ArrowUpRight className="w-3.5 h-3.5" /> 加權預估
+            <div className="mt-2 pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs">
+              <span className="font-bold text-slate-500 dark:text-slate-400 flex items-center gap-1">
+                <ArrowUpRight className="w-3.5 h-3.5 text-emerald-500" />
+                BD Progress %
               </span>
-              (月營收 × 贏率)
+              <span className={`font-black font-mono ${theme.accentText}`}>
+                {kpis.bdProgressRate.toFixed(1)}%
+              </span>
+            </div>
+            <p className="text-[10px] text-slate-400 mt-0.5">
+              加權金額 {formatCompactCurrency(kpis.expectedRevenue)} ÷ 潛在總額 (不含 BD Lost)
             </p>
           </div>
         </div>
 
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs">
+        {/* KPI 2: BD Case Count (進行中 / 已成交 / 已流失) */}
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs flex flex-col justify-between min-h-[144px]">
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-slate-500 dark:text-slate-400">BD Case Count</span>
             <div className={`p-2 rounded-xl border ${theme.accentSoftBg} ${theme.accentBorder}`}>
               <Briefcase className={`w-4 h-4 ${theme.accentText}`} />
             </div>
           </div>
-          <div className="mt-3">
-            <h3 className="text-2xl font-extrabold text-slate-800 dark:text-white tracking-tight">
-              {kpis.totalOpportunitiesCount} 個
-            </h3>
-            <p className="text-xs text-slate-400 mt-1">篩選後所持商機數</p>
+          <div className="mt-2">
+            <div className="flex items-baseline gap-1.5 text-2xl font-extrabold tracking-tight">
+              <span className="text-sky-600 dark:text-sky-400">{kpis.openCount}</span>
+              <span className="text-slate-300 dark:text-slate-600 text-lg">/</span>
+              <span className="text-emerald-600 dark:text-emerald-400">{kpis.wonCount}</span>
+              <span className="text-slate-300 dark:text-slate-600 text-lg">/</span>
+              <span className="text-rose-600 dark:text-rose-400">{kpis.lostCount}</span>
+            </div>
+            <div className="mt-2 pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-[11px] font-bold">
+              <span className="text-slate-500 dark:text-slate-400">
+                <span className="text-sky-600 dark:text-sky-400">進行中</span> /{' '}
+                <span className="text-emerald-600 dark:text-emerald-400">已成交</span> /{' '}
+                <span className="text-rose-600 dark:text-rose-400">已流失</span>
+              </span>
+              <span className="text-slate-400 font-mono">共 {kpis.totalOpportunitiesCount} 案</span>
+            </div>
           </div>
         </div>
 
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs flex flex-col justify-between min-h-[136px]">
+        {/* KPI 3: BD WON AMT (Top) & BD WON % (Bottom = wonCount / totalCount) */}
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs flex flex-col justify-between min-h-[144px]">
           <div className="pb-2.5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
             <div>
-              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">BD Won AMT</span>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">BD WON AMT</span>
               <h3 className="text-base font-black text-emerald-600 dark:text-emerald-400 mt-0.5">
-                {formatCurrency(wonAmount)}
+                {formatCurrency(kpis.wonAmount)}
               </h3>
             </div>
             <div className="p-1.5 bg-emerald-50 dark:bg-emerald-950/30 rounded-lg text-emerald-500">
@@ -509,34 +707,37 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
           </div>
           <div className="pt-2.5 flex items-center justify-between">
             <div>
-              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">BD Lost AMT</span>
-              <h3 className="text-base font-black text-rose-600 dark:text-rose-400 mt-0.5">
-                {formatCurrency(lossAmount)}
-              </h3>
-            </div>
-            <div className="p-1.5 bg-rose-50 dark:bg-rose-950/30 rounded-lg text-rose-500">
-              <TrendingUp className="w-3.5 h-3.5" />
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs flex flex-col justify-between min-h-[136px]">
-          <div className="pb-2.5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
-            <div>
-              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">BD Won %</span>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                BD WON % ({kpis.wonCount}/{kpis.totalOpportunitiesCount})
+              </span>
               <h3 className="text-base font-black text-amber-500 dark:text-amber-400 mt-0.5">
-                {kpis.winRate.toFixed(1)}%
+                {kpis.wonRate.toFixed(1)}%
               </h3>
             </div>
             <div className="p-1.5 bg-amber-50 dark:bg-amber-950/30 rounded-lg text-amber-500">
               <Target className="w-3.5 h-3.5" />
             </div>
           </div>
+        </div>
+
+        {/* KPI 4: BD LOST AMT (Top) & 活動完成率 (Bottom) */}
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs flex flex-col justify-between min-h-[144px]">
+          <div className="pb-2.5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
+            <div>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">BD LOST AMT</span>
+              <h3 className="text-base font-black text-rose-600 dark:text-rose-400 mt-0.5">
+                {formatCurrency(kpis.lostAmount)}
+              </h3>
+            </div>
+            <div className="p-1.5 bg-rose-50 dark:bg-rose-950/30 rounded-lg text-rose-500">
+              <TrendingUp className="w-3.5 h-3.5" />
+            </div>
+          </div>
           <div className="pt-2.5 flex items-center justify-between">
             <div>
-              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">任務完成率</span>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">活動完成率</span>
               <h3 className={`text-base font-black mt-0.5 ${theme.accentText}`}>
-                {kpis.taskCompletionRate.toFixed(1)}%
+                {kpis.activityCompletionRate.toFixed(1)}%
               </h3>
             </div>
             <div className={`p-1.5 rounded-lg ${theme.accentSoftBg} ${theme.accentText}`}>
@@ -554,8 +755,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
               <h2 className="text-base font-extrabold text-slate-800 dark:text-white">銷售漏斗分析 (Sales Funnel)</h2>
               <p className="text-xs text-slate-400 mt-0.5">
                 {funnelViewMode === 'weighted'
-                  ? '實心為加權金額、虛線外框為原始總額（即時連動 Slicer）'
-                  : '各銷售階段所持商機個數分佈（即時連動 Slicer）'}
+                  ? '實心為加權金額、虛線外框為原始總額（即時連動時間區間與 Slicer）'
+                  : '各銷售階段所持商機個數分佈（即時連動時間區間與 Slicer）'}
               </p>
             </div>
             <div className="flex bg-slate-100 dark:bg-slate-800 p-0.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs">
@@ -592,19 +793,19 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
             <div className="h-full flex flex-col justify-between">
               <div>
                 <h2 className="text-base font-extrabold text-slate-800 dark:text-white">銷售團隊績效排行榜</h2>
-                <p className="text-xs text-slate-400 mt-0.5">依據篩選結果，各業務加權業績排行（不含流失案）</p>
+                <p className="text-xs text-slate-400 mt-0.5">各業務加權業績與 BD Progress %（不含 BD Lost）</p>
               </div>
 
               <div className="space-y-3 my-5 overflow-y-auto max-h-72 pr-1">
                 {salesPerf.length > 0 ? (
                   salesPerf.map((perf, index) => (
                     <div
-                      key={perf.userName}
+                      key={perf.userId}
                       className="flex items-center justify-between p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/70 dark:border-slate-800"
                     >
-                      <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-3 min-w-0">
                         <div
-                          className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${
+                          className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ${
                             index === 0
                               ? 'bg-amber-500 text-white'
                               : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
@@ -612,16 +813,18 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
                         >
                           {index + 1}
                         </div>
-                        <div>
-                          <p className="text-xs font-bold text-slate-800 dark:text-slate-200">{perf.userName}</p>
-                          <p className="text-[10px] text-slate-400">{perf.oppCount} 個活躍商機</p>
+                        <div className="min-w-0">
+                          <p className="text-xs font-bold text-slate-800 dark:text-slate-200 truncate">{perf.userName}</p>
+                          <p className="text-[10px] text-slate-400">
+                            進行中 {perf.openCount} · 成交 {perf.wonCount} · Progress {perf.progressRate.toFixed(0)}%
+                          </p>
                         </div>
                       </div>
-                      <div className="text-right">
+                      <div className="text-right flex-shrink-0">
                         <p className="text-xs font-extrabold text-slate-800 dark:text-slate-100">
                           {formatCurrency(perf.expectedAmount)}
                         </p>
-                        <p className="text-[10px] text-slate-400">總額: {formatCompactCurrency(perf.totalAmount)}</p>
+                        <p className="text-[10px] text-slate-400">潛在: {formatCompactCurrency(perf.totalAmount)}</p>
                       </div>
                     </div>
                   ))
@@ -630,53 +833,56 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
                 )}
               </div>
 
-              <div className={`text-[11px] text-slate-500 dark:text-slate-400 p-3 rounded-xl border ${theme.accentSoftBg} ${theme.accentBorder} leading-relaxed`}>
-                💡 切換上方組織部門 Slicer 可即時聚焦特定團隊的加權業績表現。
-              </div>
+              <button
+                onClick={() => setActiveTab?.('metrics')}
+                className={`w-full py-2 rounded-xl text-xs font-bold border ${theme.accentSoftBg} ${theme.accentText} ${theme.accentBorder} hover:opacity-90 transition`}
+              >
+                前往「管理指標檢核」看部門/業務完整報表 →
+              </button>
             </div>
           ) : (
             <div className="h-full flex flex-col justify-between">
               <div>
                 <h2 className="text-base font-extrabold text-slate-800 dark:text-white">業務個人里程碑</h2>
-                <p className="text-xs text-slate-400 mt-0.5">您目前的個人表現與業績統計</p>
+                <p className="text-xs text-slate-400 mt-0.5">您目前的個人表現與活動統計</p>
               </div>
 
               <div className="my-5 space-y-4">
                 <div className={`p-4 rounded-xl border ${theme.accentSoftBg} ${theme.accentBorder}`}>
-                  <span className="text-xs text-slate-500 dark:text-slate-400 font-semibold uppercase">漏斗轉換率</span>
+                  <span className="text-xs text-slate-500 dark:text-slate-400 font-semibold uppercase">BD Progress %</span>
                   <div className="flex items-baseline gap-2 mt-1">
                     <span className={`text-2xl font-extrabold ${theme.accentText}`}>
-                      {kpis.funnelConversion.toFixed(1)}%
+                      {kpis.bdProgressRate.toFixed(1)}%
                     </span>
-                    <span className="text-xs text-slate-400">成交佔個人總商機比率</span>
+                    <span className="text-xs text-slate-400">加權金額 ÷ 潛在總額</span>
                   </div>
                   <div className="w-full bg-slate-200 dark:bg-slate-700 h-2 rounded-full mt-3 overflow-hidden">
                     <div
                       className={`h-full rounded-full ${theme.progressBar}`}
-                      style={{ width: `${Math.min(kpis.funnelConversion, 100)}%` }}
+                      style={{ width: `${Math.min(kpis.bdProgressRate, 100)}%` }}
                     />
                   </div>
                 </div>
 
                 <div className="p-4 bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-200/60 dark:border-emerald-900/50 rounded-xl">
-                  <span className="text-xs text-slate-500 dark:text-slate-400 font-semibold uppercase">任務完成績效</span>
+                  <span className="text-xs text-slate-500 dark:text-slate-400 font-semibold uppercase">活動完成績效</span>
                   <div className="flex items-baseline gap-2 mt-1">
                     <span className="text-2xl font-extrabold text-emerald-600 dark:text-emerald-400">
-                      {kpis.taskCompletionRate.toFixed(1)}%
+                      {kpis.activityCompletionRate.toFixed(1)}%
                     </span>
-                    <span className="text-xs text-slate-400">個人任務達成比率</span>
+                    <span className="text-xs text-slate-400">個人活動達成比率</span>
                   </div>
                   <div className="w-full bg-slate-200 dark:bg-slate-700 h-2 rounded-full mt-3 overflow-hidden">
                     <div
                       className="bg-emerald-500 h-full rounded-full"
-                      style={{ width: `${Math.min(kpis.taskCompletionRate, 100)}%` }}
+                      style={{ width: `${Math.min(kpis.activityCompletionRate, 100)}%` }}
                     />
                   </div>
                 </div>
               </div>
 
               <div className={`text-[11px] text-slate-500 dark:text-slate-400 p-3 rounded-xl border ${theme.accentSoftBg} ${theme.accentBorder}`}>
-                💡 可使用上方客戶 Slicer 鎖定單一重點客戶，或前往「客戶總覽 360°」統整追蹤。
+                💡 可切換上方月區間與客戶 Slicer，或前往「管理指標檢核」查看週/月報與活動統計。
               </div>
             </div>
           )}

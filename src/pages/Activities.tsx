@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useLayout } from '../context/LayoutContext';
-import { db } from '../services/db';
+import { db, getEligibleSalesReps, getVisibleOrgsForUser } from '../services/db';
 import type { Company, Organization, Activity, Opportunity, User, ActivityTypeConfig, Contact } from '../services/db';
 import { exportToCsv } from '../utils/exportCsv';
 import { inferPreviewTags, getTagToneClass } from '../utils/aiTagPreview';
@@ -23,15 +23,17 @@ import {
   MessageSquare,
   Coins,
   Gift,
-  Download
+  Download,
+  User as UserIcon
 } from 'lucide-react';
 
 export const Activities: React.FC<{ setActiveTab?: (tab: string) => void }> = ({ setActiveTab }) => {
   const { currentUser } = useAuth();
   const { theme, dataVersion } = useLayout();
   
-  // Slicers State
+  // Slicers State (Org + Conditional Sales Rep + Company)
   const [selectedOrgId, setSelectedOrgId] = useState<string>('');
+  const [selectedUserId, setSelectedUserId] = useState<string>('');
   const [selectedCompanyId, setSelectedCompanyId] = useState<string>('');
 
   // Dropdown Options
@@ -96,11 +98,34 @@ export const Activities: React.FC<{ setActiveTab?: (tab: string) => void }> = ({
     loadOptions();
   }, []);
 
+  const visibleOrgs = useMemo(() => {
+    if (!currentUser) return [];
+    return getVisibleOrgsForUser(organizations, users, currentUser.role, currentUser.id);
+  }, [organizations, users, currentUser]);
+
+  const eligibleReps = useMemo(() => {
+    if (!currentUser) return [];
+    return getEligibleSalesReps(
+      organizations,
+      users,
+      currentUser.role,
+      currentUser.id,
+      selectedOrgId || undefined
+    );
+  }, [organizations, users, currentUser, selectedOrgId]);
+
+  useEffect(() => {
+    if (selectedUserId && !eligibleReps.some(u => u.id === selectedUserId)) {
+      setSelectedUserId('');
+    }
+  }, [eligibleReps, selectedUserId]);
+
   const loadData = async () => {
     if (!currentUser) return;
     try {
       const filters = {
         orgId: selectedOrgId || undefined,
+        userId: selectedUserId || undefined,
         companyId: selectedCompanyId || undefined
       };
 
@@ -128,7 +153,7 @@ export const Activities: React.FC<{ setActiveTab?: (tab: string) => void }> = ({
 
   useEffect(() => {
     loadData();
-  }, [currentUser, selectedOrgId, selectedCompanyId, dataVersion]);
+  }, [currentUser, selectedOrgId, selectedUserId, selectedCompanyId, dataVersion]);
 
   // 打開新增/編輯 Modal
   const openModal = (act: Activity | null = null) => {
@@ -246,16 +271,25 @@ export const Activities: React.FC<{ setActiveTab?: (tab: string) => void }> = ({
     return taskDate <= today;
   };
 
-  const renderOrgOptions = (parentId: string | null, depth = 0) => {
-    const list = organizations.filter(o => o.parentId === parentId);
-    return list.map(org => (
-      <React.Fragment key={org.id}>
-        <option value={org.id}>
-          {'\u00A0'.repeat(depth * 3)}{org.name}
-        </option>
-        {renderOrgOptions(org.id, depth + 1)}
-      </React.Fragment>
-    ));
+  const renderOrgOptions = (parentId: string | null, depth = 0, visited = new Set<string>()) => {
+    const visibleIds = new Set(visibleOrgs.map(o => o.id));
+    const list = visibleOrgs.filter(o => {
+      if (visited.has(o.id)) return false;
+      if (parentId === null) return o.parentId === null || !visibleIds.has(o.parentId);
+      return o.parentId === parentId;
+    });
+    return list.map(org => {
+      const nextVisited = new Set(visited);
+      nextVisited.add(org.id);
+      return (
+        <React.Fragment key={org.id}>
+          <option value={org.id} className="bg-white dark:bg-slate-950">
+            {'\u00A0'.repeat(depth * 3)}{org.name}
+          </option>
+          {renderOrgOptions(org.id, depth + 1, nextVisited)}
+        </React.Fragment>
+      );
+    });
   };
 
   const handleExportActivities = () => {
@@ -303,6 +337,23 @@ export const Activities: React.FC<{ setActiveTab?: (tab: string) => void }> = ({
               >
                 <option value="" className="bg-white dark:bg-slate-950">(所有部門)</option>
                 {renderOrgOptions(null)}
+              </select>
+            </div>
+          )}
+
+          {/* Conditional Sales Rep Slicer (#6) */}
+          {currentUser?.role !== 'AM' && eligibleReps.length > 0 && (
+            <div className="flex items-center gap-1.5">
+              <UserIcon className={`w-4 h-4 ${theme.accentText}`} />
+              <select
+                value={selectedUserId}
+                onChange={(e) => setSelectedUserId(e.target.value)}
+                className="px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-semibold text-slate-700 dark:text-slate-200"
+              >
+                <option value="" className="bg-white dark:bg-slate-950">全部 Sales Rep ({eligibleReps.length})</option>
+                {eligibleReps.map(rep => (
+                  <option key={rep.id} value={rep.id} className="bg-white dark:bg-slate-950">{rep.name}</option>
+                ))}
               </select>
             </div>
           )}
@@ -367,8 +418,8 @@ export const Activities: React.FC<{ setActiveTab?: (tab: string) => void }> = ({
                   className={`
                     p-4 rounded-2xl border flex items-start gap-3 transition-all hover:shadow-sm cursor-pointer hover:border-slate-300 dark:hover:border-slate-700
                     ${isUrgent 
-                      ? 'bg-rose-50/30 dark:bg-rose-955/25 border-rose-200 dark:border-rose-900/60' 
-                      : 'bg-slate-50 dark:bg-slate-900 border-slate-150 dark:border-slate-800/80'}
+                      ? 'bg-rose-50/40 dark:bg-rose-950/30 border-rose-200 dark:border-rose-900/60' 
+                      : 'bg-slate-50 dark:bg-slate-900 border-slate-200 dark:border-slate-800'}
                   `}
                 >
                   <button 

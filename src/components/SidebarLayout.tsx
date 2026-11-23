@@ -109,8 +109,8 @@ export const SidebarLayout: React.FC<SidebarLayoutProps> = ({
               <Building2 className="w-6 h-6 text-sky-400" />
             </div>
             <div>
-              <h1 className="font-extrabold text-xl tracking-tight bg-gradient-to-r from-sky-400 via-blue-400 to-indigo-400 bg-clip-text text-transparent">Antigravity</h1>
-              <p className="text-xs text-slate-500 font-semibold tracking-wider uppercase">B2B CRM System</p>
+              <h1 className="font-extrabold text-xl tracking-tight bg-gradient-to-r from-sky-400 via-blue-400 to-indigo-400 bg-clip-text text-transparent">EZB2B CRM</h1>
+              <p className="text-xs text-slate-500 font-semibold tracking-wider uppercase">B2B Sales Platform</p>
             </div>
           </div>
 

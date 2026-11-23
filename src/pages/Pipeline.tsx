@@ -1,7 +1,12 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useLayout } from '../context/LayoutContext';
-import { db } from '../services/db';
+import {
+  db,
+  getEligibleSalesReps,
+  getVisibleOrgsForUser,
+  generateId,
+} from '../services/db';
 import type {
   Stage,
   Opportunity,
@@ -25,6 +30,7 @@ import {
   FolderTree,
   Edit3,
   Calendar,
+  CalendarRange,
   Coins,
   ChevronLeft,
   ChevronRight,
@@ -51,9 +57,12 @@ export const Pipeline: React.FC = () => {
     setIsCopilotOpen,
   } = useLayout();
 
-  // Slicers State
+  // Slicers State (Org + Conditional Sales Rep + Company + Month Range)
   const [selectedOrgId, setSelectedOrgId] = useState<string>('');
+  const [selectedUserId, setSelectedUserId] = useState<string>('');
   const [selectedCompanyId, setSelectedCompanyId] = useState<string>('');
+  const [startMonth, setStartMonth] = useState<string>('');
+  const [endMonth, setEndMonth] = useState<string>('');
   const [aiTagFilter, setAiTagFilter] = useState<string>('');
 
   // Sub-view mode: Kanban / Table / Gantt
@@ -61,6 +70,7 @@ export const Pipeline: React.FC = () => {
   const [cardDensity, setCardDensity] = useState<'normal' | 'compact'>('normal');
   const [hideLossStage, setHideLossStage] = useState<boolean>(false);
   const [ganttZoom, setGanttZoom] = useState<GanttZoom>('month');
+  const [ganttOffset, setGanttOffset] = useState<number>(0); // 彈性前後平移區間 (0 = 自動對齊)
 
   // Kanban horizontal scroll ref
   const kanbanScrollRef = useRef<HTMLDivElement | null>(null);
@@ -156,7 +166,7 @@ export const Pipeline: React.FC = () => {
       return;
     }
     const actData: Activity = {
-      id: `act-${Date.now()}`,
+      id: generateId('act'),
       opportunityId: selectedOppForDrawer.id,
       userId: selectedOppForDrawer.userId,
       type: quickActType || '待辦任務',
@@ -177,12 +187,37 @@ export const Pipeline: React.FC = () => {
     }
   };
 
+  const visibleOrgs = useMemo(() => {
+    if (!currentUser) return [];
+    return getVisibleOrgsForUser(organizations, users, currentUser.role, currentUser.id);
+  }, [organizations, users, currentUser]);
+
+  const eligibleReps = useMemo(() => {
+    if (!currentUser) return [];
+    return getEligibleSalesReps(
+      organizations,
+      users,
+      currentUser.role,
+      currentUser.id,
+      selectedOrgId || undefined
+    );
+  }, [organizations, users, currentUser, selectedOrgId]);
+
+  useEffect(() => {
+    if (selectedUserId && !eligibleReps.some(u => u.id === selectedUserId)) {
+      setSelectedUserId('');
+    }
+  }, [eligibleReps, selectedUserId]);
+
   const loadData = async () => {
     if (!currentUser) return;
     try {
       const filters = {
         orgId: selectedOrgId || undefined,
+        userId: selectedUserId || undefined,
         companyId: selectedCompanyId || undefined,
+        startMonth: startMonth || undefined,
+        endMonth: endMonth || undefined,
       };
 
       const [activeStages, opps, comps, orgs, usrs, prods, bgItems, actTypes, acts] =
@@ -221,7 +256,7 @@ export const Pipeline: React.FC = () => {
 
   useEffect(() => {
     loadData();
-  }, [currentUser, selectedOrgId, selectedCompanyId, dataVersion]);
+  }, [currentUser, selectedOrgId, selectedUserId, selectedCompanyId, startMonth, endMonth, dataVersion]);
 
   useEffect(() => {
     const focusCompId = sessionStorage.getItem('autofocus_company_id');
@@ -318,7 +353,7 @@ export const Pipeline: React.FC = () => {
         return;
       }
       const newComp: Company = {
-        id: `comp-${Date.now()}`,
+        id: generateId('comp'),
         name: inlineCompName.trim(),
         industry: inlineCompIndustry.trim() || '一般企業',
         createdAt: new Date().toISOString().split('T')[0],
@@ -351,7 +386,7 @@ export const Pipeline: React.FC = () => {
       : stages.find(s => s.id === currentStageId)?.defaultWinProbability || 10;
 
     const oppData: Opportunity = {
-      id: editingOpp ? editingOpp.id : `opp-${Date.now()}`,
+      id: editingOpp ? editingOpp.id : generateId('opp'),
       companyId: finalCompanyId,
       userId,
       stageId: currentStageId,
@@ -410,49 +445,64 @@ export const Pipeline: React.FC = () => {
     setDragOverStageId(null);
   };
 
+  const handleMoveOpportunityStage = async (oppId: string, targetStageId: string) => {
+    try {
+      const opp = await db.getOpportunityById(oppId);
+      if (opp && opp.stageId !== targetStageId) {
+        const originalStage = stages.find(s => s.id === opp.stageId);
+        const targetStage = stages.find(s => s.id === targetStageId);
+        opp.stageId = targetStageId;
+        if (targetStage) {
+          opp.winProbability = targetStage.defaultWinProbability;
+        }
+        await db.saveOpportunity(opp);
+
+        if (targetStage?.outcome === 'WON' && originalStage?.outcome !== 'WON') {
+          triggerConfetti();
+        }
+        if (selectedOppForDrawer?.id === opp.id) {
+          setSelectedOppForDrawer({ ...opp });
+        }
+        bumpDataVersion();
+      }
+    } catch (err) {
+      console.error('Failed to update stage', err);
+    }
+  };
+
   const handleDrop = async (e: React.DragEvent, targetStageId: string) => {
     e.preventDefault();
     setDragOverStageId(null);
     const oppId = e.dataTransfer.getData('text/plain');
     if (!oppId) return;
-
-    try {
-      const opp = await db.getOpportunityById(oppId);
-      if (opp && opp.stageId !== targetStageId) {
-        const originalStageId = opp.stageId;
-        opp.stageId = targetStageId;
-        const stage = stages.find(s => s.id === targetStageId);
-        if (stage) {
-          opp.winProbability = stage.defaultWinProbability;
-        }
-        await db.saveOpportunity(opp);
-
-        const activeStages = [...stages].sort((a, b) => a.displayOrder - b.displayOrder);
-        const wonStageId = activeStages[activeStages.length - 2]?.id || 'stage-5';
-        if (targetStageId === wonStageId && originalStageId !== wonStageId) {
-          triggerConfetti();
-        }
-        bumpDataVersion();
-      }
-    } catch (err) {
-      console.error('Failed to update stage on drop', err);
-    }
+    await handleMoveOpportunityStage(oppId, targetStageId);
   };
 
   const formatCompactCurrency = (value: number) =>
     value >= 10000 ? `NT$ ${(value / 10000).toFixed(0)} 萬` : `NT$ ${value}`;
 
-  const renderOrgOptions = (parentId: string | null, depth = 0) => {
-    const list = organizations.filter(o => o.parentId === parentId);
-    return list.map(org => (
-      <React.Fragment key={org.id}>
-        <option value={org.id} className="bg-white dark:bg-slate-950">
-          {'\u00A0'.repeat(depth * 3)}
-          {org.name}
-        </option>
-        {renderOrgOptions(org.id, depth + 1)}
-      </React.Fragment>
-    ));
+  const renderOrgOptions = (parentId: string | null, depth = 0, visited = new Set<string>()) => {
+    const visibleIds = new Set(visibleOrgs.map(o => o.id));
+    const list = visibleOrgs.filter(o => {
+      if (visited.has(o.id)) return false;
+      if (parentId === null) {
+        return o.parentId === null || !visibleIds.has(o.parentId);
+      }
+      return o.parentId === parentId;
+    });
+    return list.map(org => {
+      const nextVisited = new Set(visited);
+      nextVisited.add(org.id);
+      return (
+        <React.Fragment key={org.id}>
+          <option value={org.id} className="bg-white dark:bg-slate-950">
+            {'\u00A0'.repeat(depth * 3)}
+            {org.name}
+          </option>
+          {renderOrgOptions(org.id, depth + 1, nextVisited)}
+        </React.Fragment>
+      );
+    });
   };
 
   const handleExportPipeline = () => {
@@ -503,21 +553,60 @@ export const Pipeline: React.FC = () => {
   // Helper: single-source-of-truth stage color synced across Funnel, Kanban, Table & Gantt
   const getStageTokenById = (targetStageId: string) => {
     const idx = stages.findIndex(s => s.id === targetStageId);
-    return getStageColor(idx, stages.length, variant);
+    const st = stages[idx];
+    return getStageColor(idx, stages.length, variant, st?.outcome);
   };
 
   // =========================================================================
-  // UPGRADED GANTT CHART WITH WEEK / MONTH / QUARTER ZOOM + TODAY LINE
+  // UPGRADED GANTT CHART: Synced to Month Range OR Auto-Fit Panorama + Flexible Pan + W/M/Q Zoom
   // =========================================================================
   const renderGanttChart = () => {
     const today = new Date();
+
+    // 1. 決定時間軸起始點與跨度（與上方月區間同步；未設定時自動掃描商機排程全貌）
+    const allSchedTs: number[] = [];
+    for (const opp of displayedOpportunities) {
+      for (const d of Object.values(opp.schedules || {})) {
+        if (!d) continue;
+        const ts = new Date(d).getTime();
+        if (!Number.isNaN(ts)) allSchedTs.push(ts);
+      }
+      if (opp.expectedCloseDate) {
+        const ts = new Date(opp.expectedCloseDate).getTime();
+        if (!Number.isNaN(ts)) allSchedTs.push(ts);
+      }
+    }
+
+    let anchorStartDate: Date;
+    let anchorEndDate: Date;
+
+    if (startMonth || endMonth) {
+      const sParts = (startMonth || endMonth).split('-').map(Number);
+      const eParts = (endMonth || startMonth).split('-').map(Number);
+      anchorStartDate = new Date(sParts[0], sParts[1] - 1, 1);
+      anchorEndDate = new Date(eParts[0], eParts[1], 0);
+    } else if (allSchedTs.length > 0) {
+      const minTs = Math.min(...allSchedTs);
+      const maxTs = Math.max(...allSchedTs);
+      anchorStartDate = new Date(minTs);
+      anchorEndDate = new Date(maxTs);
+    } else {
+      anchorStartDate = new Date(today.getFullYear(), today.getMonth(), 1);
+      anchorEndDate = new Date(today.getFullYear(), today.getMonth() + 4, 0);
+    }
+
     const columns: { label: string; subLabel?: string; start: number; end: number }[] = [];
 
     if (ganttZoom === 'week') {
-      // Find Monday of 2 weeks ago, render 10 weeks
-      const dayOfWeek = today.getDay() || 7;
-      const baseMonday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - dayOfWeek + 1 - 14);
-      for (let i = 0; i < 10; i++) {
+      const dayOfWeek = anchorStartDate.getDay() || 7;
+      const baseMonday = new Date(
+        anchorStartDate.getFullYear(),
+        anchorStartDate.getMonth(),
+        anchorStartDate.getDate() - dayOfWeek + 1 + ganttOffset * 4 * 7
+      );
+      const spanWeeks = Math.ceil((anchorEndDate.getTime() - anchorStartDate.getTime()) / (7 * 86400000)) + 2;
+      const totalWeeks = Math.min(20, Math.max(8, spanWeeks));
+      for (let i = 0; i < totalWeeks; i++) {
         const start = new Date(baseMonday.getTime() + i * 7 * 86400000);
         const end = new Date(start.getTime() + 7 * 86400000);
         const oneJan = new Date(start.getFullYear(), 0, 1);
@@ -530,29 +619,38 @@ export const Pipeline: React.FC = () => {
         });
       }
     } else if (ganttZoom === 'month') {
-      // 7 months starting from 1 month ago
-      for (let i = -1; i < 6; i++) {
-        const start = new Date(today.getFullYear(), today.getMonth() + i, 1);
-        const end = new Date(today.getFullYear(), today.getMonth() + i + 1, 1);
+      const startMonthIndex = anchorStartDate.getFullYear() * 12 + anchorStartDate.getMonth() + ganttOffset * 4;
+      const endMonthIndex = anchorEndDate.getFullYear() * 12 + anchorEndDate.getMonth();
+      const rawSpan = endMonthIndex - (anchorStartDate.getFullYear() * 12 + anchorStartDate.getMonth()) + 1;
+      // 至少顯示 6 個月（涵蓋起點往後 4+ 個 interval），最多 15 個月
+      const totalMonths = Math.min(15, Math.max(6, rawSpan + 1));
+      for (let i = 0; i < totalMonths; i++) {
+        const mIdx = startMonthIndex + i;
+        const y = Math.floor(mIdx / 12);
+        const m = ((mIdx % 12) + 12) % 12;
+        const start = new Date(y, m, 1);
+        const end = new Date(y, m + 1, 1);
         columns.push({
-          label: `${start.getFullYear()}/${String(start.getMonth() + 1).padStart(2, '0')}`,
+          label: `${y}/${String(m + 1).padStart(2, '0')}`,
           start: start.getTime(),
           end: end.getTime(),
         });
       }
     } else {
-      // 4 Quarters starting from current quarter - 1
-      const currentQ = Math.floor(today.getMonth() / 3);
-      for (let i = -1; i < 3; i++) {
-        const qIndex = currentQ + i;
-        const yearOffset = Math.floor(qIndex / 4);
-        const normalizedQ = ((qIndex % 4) + 4) % 4;
-        const year = today.getFullYear() + yearOffset;
-        const start = new Date(year, normalizedQ * 3, 1);
-        const end = new Date(year, normalizedQ * 3 + 3, 1);
+      // Quarter: 至少顯示 4 季（固定往後至少 4 個 interval，並可前後平移）
+      const startQIdx = anchorStartDate.getFullYear() * 4 + Math.floor(anchorStartDate.getMonth() / 3) + ganttOffset * 2;
+      const endQIdx = anchorEndDate.getFullYear() * 4 + Math.floor(anchorEndDate.getMonth() / 3);
+      const rawSpanQ = endQIdx - (anchorStartDate.getFullYear() * 4 + Math.floor(anchorStartDate.getMonth() / 3)) + 1;
+      const totalQuarters = Math.min(8, Math.max(4, rawSpanQ + 1));
+      for (let i = 0; i < totalQuarters; i++) {
+        const qIndex = startQIdx + i;
+        const year = Math.floor(qIndex / 4);
+        const q = ((qIndex % 4) + 4) % 4;
+        const start = new Date(year, q * 3, 1);
+        const end = new Date(year, q * 3 + 3, 1);
         columns.push({
-          label: `${year} Q${normalizedQ + 1}`,
-          subLabel: `${normalizedQ * 3 + 1}-${normalizedQ * 3 + 3}月`,
+          label: `${year} Q${q + 1}`,
+          subLabel: `${q * 3 + 1}-${q * 3 + 3}月`,
           start: start.getTime(),
           end: end.getTime(),
         });
@@ -565,21 +663,51 @@ export const Pipeline: React.FC = () => {
     const todayTs = today.getTime();
     const todayPct = ((todayTs - startTs) / totalDuration) * 100;
     const showTodayLine = todayPct >= 0 && todayPct <= 100;
-    const minTableWidth = ganttZoom === 'week' ? 1040 : ganttZoom === 'month' ? 860 : 720;
+    const minTableWidth = Math.max(760, 260 + columns.length * (ganttZoom === 'week' ? 88 : 115));
 
     return (
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-xs space-y-4">
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
+        <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-3">
           <div>
             <h3 className="text-sm font-extrabold text-slate-800 dark:text-white">
               BD Schedule 時間軸甘特圖
             </h3>
             <p className="text-xs text-slate-400 mt-0.5">
-              支援週 / 月 / 季時間尺度縮放；滿填充橫條代表當前贏率，下方彩色圓點標記各階段目標日
+              {startMonth || endMonth
+                ? `已自動對齊篩選區間 (${startMonth || '起'} ~ ${endMonth || '迄'}) 並涵蓋至少 4 個刻度，亦可手動前後平移`
+                : '預設自動掃描所有商機排程全貌，支援週 / 月 / 季切換與前後區間平移'}
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2.5">
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Flexible Pan Controls */}
+            <div className="inline-flex items-center rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 p-0.5 text-xs">
+              <button
+                type="button"
+                onClick={() => setGanttOffset(o => o - 1)}
+                className="px-2 py-1 rounded-lg hover:bg-white dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 font-bold"
+                title="往前平移區間"
+              >
+                ◀ 前移
+              </button>
+              <button
+                type="button"
+                onClick={() => setGanttOffset(0)}
+                className="px-2.5 py-1 rounded-lg hover:bg-white dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold"
+                title="重設回自動全貌 / 篩選起點"
+              >
+                自動全貌
+              </button>
+              <button
+                type="button"
+                onClick={() => setGanttOffset(o => o + 1)}
+                className="px-2 py-1 rounded-lg hover:bg-white dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 font-bold"
+                title="往後平移區間"
+              >
+                後移 ▶
+              </button>
+            </div>
+
             {/* Week / Month / Quarter Zoom Switcher */}
             <div className="inline-flex items-center p-0.5 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs">
               {(
@@ -592,7 +720,10 @@ export const Pipeline: React.FC = () => {
                 <button
                   key={z.id}
                   type="button"
-                  onClick={() => setGanttZoom(z.id)}
+                  onClick={() => {
+                    setGanttZoom(z.id);
+                    setGanttOffset(0);
+                  }}
                   className={`px-3 py-1 rounded-lg font-bold transition-all ${
                     ganttZoom === z.id
                       ? theme.badgeBg
@@ -655,10 +786,13 @@ export const Pipeline: React.FC = () => {
                   schedDates.length > 0
                     ? Math.min(...schedDates)
                     : new Date(opp.expectedCloseDate).getTime() - 45 * 86400000;
-                const rawEnd =
-                  schedDates.length > 0
-                    ? Math.max(...schedDates)
-                    : new Date(opp.expectedCloseDate).getTime();
+                const expCloseTs = opp.expectedCloseDate ? new Date(opp.expectedCloseDate).getTime() : NaN;
+                const maxSchedTs = schedDates.length > 0 ? Math.max(...schedDates) : NaN;
+                // 修復 Quick-Create 只有單一排程日時甘特條過短的問題：延伸至預計結案日或 +30 天
+                let rawEnd = !Number.isNaN(maxSchedTs) ? maxSchedTs : expCloseTs;
+                if (Number.isNaN(rawEnd) || rawEnd <= rawStart) {
+                  rawEnd = !Number.isNaN(expCloseTs) && expCloseTs > rawStart ? expCloseTs : rawStart + 30 * 86400000;
+                }
 
                 const isCompletelyOutside = rawEnd < startTs || rawStart > endTs;
                 const oppStart = Math.max(startTs, rawStart);
@@ -744,13 +878,15 @@ export const Pipeline: React.FC = () => {
                       )}
 
                       {showStagesOnGantt &&
-                        stages.slice(0, -1).map((st, stIdx) => {
-                          const dateStr = opp.schedules?.[st.id];
-                          if (!dateStr) return null;
-                          const dateTs = new Date(dateStr).getTime();
-                          if (dateTs < startTs || dateTs > endTs) return null;
-                          const pct = ((dateTs - startTs) / totalDuration) * 100;
-                          const dotClass = getStageColor(stIdx, stages.length, variant).dotBg;
+                        stages
+                          .filter(st => st.outcome !== 'LOST')
+                          .map((st, stIdx) => {
+                            const dateStr = opp.schedules?.[st.id];
+                            if (!dateStr) return null;
+                            const dateTs = new Date(dateStr).getTime();
+                            if (dateTs < startTs || dateTs > endTs) return null;
+                            const pct = ((dateTs - startTs) / totalDuration) * 100;
+                            const dotClass = getStageColor(stIdx, stages.length, variant, st.outcome).dotBg;
 
                           return (
                             <div
@@ -833,7 +969,7 @@ export const Pipeline: React.FC = () => {
                   </td>
                   <td className="py-3 px-4">
                     {(() => {
-                      const stToken = getStageColor(stgIdx, stages.length, variant);
+                      const stToken = getStageColor(stgIdx, stages.length, variant, stg?.outcome);
                       return (
                         <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full border font-bold ${stToken.pillClass}`}>
                           <span className={`w-2 h-2 rounded-full ${stToken.barBg}`} />
@@ -905,9 +1041,10 @@ export const Pipeline: React.FC = () => {
     </div>
   );
 
-  // Stages displayed in Kanban (optionally hide last stage BD Loss)
-  const visibleKanbanStages =
-    hideLossStage && stages.length > 1 ? stages.slice(0, -1) : stages;
+  // Stages displayed in Kanban (optionally hide LOST stage via explicit stage.outcome)
+  const visibleKanbanStages = hideLossStage
+    ? stages.filter(s => s.outcome !== 'LOST')
+    : stages;
 
   // Dynamic column width: Variant B has maximum width so columns can sit compactly side by side!
   const kanbanColumnWidthClass =
@@ -1002,8 +1139,48 @@ export const Pipeline: React.FC = () => {
           )}
         </div>
 
-        {/* Slicers + Export + Add Button */}
-        <div className="flex flex-wrap items-center gap-2.5 w-full xl:w-auto justify-end">
+        {/* Slicers (Month Range + Org + Conditional Sales Rep + Company) + Export + Add Button */}
+        <div className="flex flex-wrap items-center gap-2 w-full xl:w-auto justify-end">
+          {/* Month Range Picker (#2) */}
+          <div className="flex items-center gap-1 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-2 py-1 text-xs">
+            <CalendarRange className={`w-3.5 h-3.5 flex-shrink-0 ${theme.accentText}`} />
+            <input
+              type="month"
+              value={startMonth}
+              onChange={e => {
+                setStartMonth(e.target.value);
+                setGanttOffset(0);
+              }}
+              className="bg-transparent text-slate-700 dark:text-slate-200 font-semibold outline-none w-[106px]"
+              title="開始月份"
+            />
+            <span className="text-slate-400">~</span>
+            <input
+              type="month"
+              value={endMonth}
+              onChange={e => {
+                setEndMonth(e.target.value);
+                setGanttOffset(0);
+              }}
+              className="bg-transparent text-slate-700 dark:text-slate-200 font-semibold outline-none w-[106px]"
+              title="結束月份"
+            />
+            {(startMonth || endMonth) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setStartMonth('');
+                  setEndMonth('');
+                  setGanttOffset(0);
+                }}
+                className="text-[10px] font-bold text-rose-500 px-1"
+                title="清除月份範圍"
+              >
+                ✕
+              </button>
+            )}
+          </div>
+
           {currentUser?.role !== 'AM' && (
             <div className="flex items-center gap-1.5">
               <FolderTree className={`w-4 h-4 ${theme.accentText}`} />
@@ -1014,6 +1191,25 @@ export const Pipeline: React.FC = () => {
               >
                 <option value="" className="bg-white dark:bg-slate-950">所有部門</option>
                 {renderOrgOptions(null)}
+              </select>
+            </div>
+          )}
+
+          {/* Conditional Sales Rep Slicer (#6) */}
+          {currentUser?.role !== 'AM' && eligibleReps.length > 0 && (
+            <div className="flex items-center gap-1.5">
+              <UserIcon className={`w-4 h-4 ${theme.accentText}`} />
+              <select
+                value={selectedUserId}
+                onChange={e => setSelectedUserId(e.target.value)}
+                className="px-2.5 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-semibold text-slate-700 dark:text-slate-200"
+              >
+                <option value="" className="bg-white dark:bg-slate-950">全部 Sales Rep ({eligibleReps.length})</option>
+                {eligibleReps.map(rep => (
+                  <option key={rep.id} value={rep.id} className="bg-white dark:bg-slate-950">
+                    {rep.name}
+                  </option>
+                ))}
               </select>
             </div>
           )}
@@ -1499,7 +1695,7 @@ export const Pipeline: React.FC = () => {
                       <Calendar className={`w-3.5 h-3.5 ${theme.accentText}`} /> 各銷售階段預定時程 (Schedule)
                     </span>
                     <div className="grid grid-cols-2 gap-3 max-h-[160px] overflow-y-auto pr-1 border border-slate-200 dark:border-slate-800 p-3 rounded-xl bg-slate-50 dark:bg-slate-950/50">
-                      {stages.slice(0, -1).map(st => (
+                      {stages.filter(st => st.outcome !== 'LOST').map(st => (
                         <div key={st.id} className="space-y-1">
                           <label className="block text-[10px] font-bold text-slate-500 dark:text-slate-400 truncate">
                             {st.name}
@@ -1643,6 +1839,21 @@ export const Pipeline: React.FC = () => {
               </div>
 
               <div className="flex-1 overflow-y-auto p-5 space-y-5">
+                {/* Quick Stage Switcher (免跨 6 欄拖曳即可快速切換階段！) */}
+                <div className="flex items-center justify-between gap-2 p-3 rounded-xl bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800">
+                  <span className="text-xs font-bold text-slate-500 dark:text-slate-400">快速切換銷售階段</span>
+                  <select
+                    value={selectedOppForDrawer.stageId}
+                    onChange={e => handleMoveOpportunityStage(selectedOppForDrawer.id, e.target.value)}
+                    className="px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-bold text-slate-800 dark:text-slate-100"
+                  >
+                    {stages.map(st => (
+                      <option key={st.id} value={st.id} className="bg-white dark:bg-slate-950">
+                        {st.name} ({st.defaultWinProbability}%)
+                      </option>
+                    ))}
+                  </select>
+                </div>
                 {tags.length > 0 && (
                   <div className="flex flex-wrap gap-1.5">
                     {tags.map(t => (
@@ -1662,7 +1873,7 @@ export const Pipeline: React.FC = () => {
                   </h4>
                   <div className="border border-slate-200 dark:border-slate-800 p-4 bg-slate-50/70 dark:bg-slate-950/30 rounded-2xl">
                     <div className="relative pl-6 border-l border-slate-200 dark:border-slate-700 space-y-3.5">
-                      {stages.slice(0, -1).map(st => {
+                      {stages.filter(st => st.outcome !== 'LOST').map(st => {
                         const dateStr = selectedOppForDrawer.schedules?.[st.id];
                         const isActive = selectedOppForDrawer.stageId === st.id;
                         return (

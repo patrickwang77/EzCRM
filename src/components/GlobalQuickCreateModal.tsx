@@ -408,7 +408,7 @@ export const GlobalQuickCreateModal: React.FC = () => {
               </button>
               {showAdvancedOpp && (
                 <div className="p-3.5 grid grid-cols-2 gap-2.5 bg-white dark:bg-slate-900 border-t border-slate-100 dark:border-slate-800">
-                  {stages.slice(0, -1).map(st => (
+                  {stages.filter(st => st.outcome !== 'LOST').map(st => (
                     <div key={st.id}>
                       <label className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1">
                         {st.name}
