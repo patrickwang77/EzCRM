@@ -643,27 +643,22 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
         </button>
       </div>
 
-      {/* 5 Executive KPI Cards (解耦活動完成率與 BD Lost，保留既有文字與 A/B/C 主題配色) */}
+      {/* 5 Executive KPI Cards (大字體置中呈現，保留既有文字與 A/B/C 主題配色) */}
       {(() => {
         const refAmountBase = kpis.totalPotentialAmount > 0
           ? kpis.totalPotentialAmount
           : kpis.wonAmount + kpis.lostAmount;
         const wonAmountShare = refAmountBase > 0 ? (kpis.wonAmount / refAmountBase) * 100 : 0;
         const lostAmountShare = refAmountBase > 0 ? (kpis.lostAmount / refAmountBase) * 100 : 0;
+        const pendingActivitiesCount = Math.max(
+          0,
+          kpis.totalActivitiesCount - kpis.completedActivitiesCount
+        );
 
         const openBarBg =
           variant === 'B' ? 'bg-teal-500' : variant === 'C' ? 'bg-violet-500' : 'bg-blue-500';
         const openDotBg =
           variant === 'B' ? 'bg-teal-500' : variant === 'C' ? 'bg-violet-500' : 'bg-blue-500';
-
-        const activityStatus =
-          kpis.totalActivitiesCount === 0
-            ? { label: '尚無任務', cls: 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-700' }
-            : kpis.activityCompletionRate >= 80
-            ? { label: '優良', cls: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30' }
-            : kpis.activityCompletionRate >= 60
-            ? { label: '良好', cls: `${theme.accentSoftBg} ${theme.accentText} ${theme.accentBorder}` }
-            : { label: '待加強', cls: 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30' };
 
         const gridCols =
           variant === 'C' && isCopilotOpen
@@ -673,23 +668,24 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
         return (
           <div className={`grid ${gridCols} gap-3.5`}>
             {/* KPI 1: 全部潛在商機 + BD Progress % */}
-            <div className="bg-white dark:bg-slate-900/95 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-xs hover:shadow-md transition-shadow flex flex-col justify-between min-h-[158px]">
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <span className="text-xs font-bold text-slate-500 dark:text-slate-400 block">
-                    全部潛在商機
-                  </span>
-                  <h3
-                    className="text-[19px] 2xl:text-[22px] font-black text-slate-900 dark:text-white tracking-tight tabular-nums mt-1.5 truncate"
-                    title={formatCurrency(kpis.totalPotentialAmount)}
-                  >
-                    {formatCurrency(kpis.totalPotentialAmount)}
-                  </h3>
-                </div>
-                <KpiFunnelIcon variant={variant} className="w-10 h-10 flex-shrink-0 -mt-0.5" />
+            <div className="bg-white dark:bg-slate-900/95 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-xs hover:shadow-md transition-shadow flex flex-col justify-between min-h-[168px]">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-extrabold text-slate-500 dark:text-slate-400">
+                  全部潛在商機
+                </span>
+                <KpiFunnelIcon variant={variant} className="w-9 h-9 flex-shrink-0" />
               </div>
 
-              <div className="mt-3 space-y-1.5">
+              <div className="py-1.5 text-center">
+                <h3
+                  className="text-2xl xl:text-[25px] 2xl:text-[28px] font-black text-slate-900 dark:text-white tracking-tight tabular-nums leading-tight truncate"
+                  title={formatCurrency(kpis.totalPotentialAmount)}
+                >
+                  {formatCurrency(kpis.totalPotentialAmount)}
+                </h3>
+              </div>
+
+              <div className="space-y-1.5">
                 <div className="flex items-center justify-between text-xs">
                   <span className="font-bold text-slate-500 dark:text-slate-400">BD Progress %</span>
                   <span className={`font-black font-mono tabular-nums ${theme.accentText}`}>
@@ -702,34 +698,42 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
                     style={{ width: `${Math.min(100, Math.max(0, kpis.bdProgressRate))}%` }}
                   />
                 </div>
-                <p className="text-[10px] text-slate-400 dark:text-slate-400 pt-0.5 truncate" title={`加權金額 ${formatCurrency(kpis.expectedRevenue)} ÷ 潛在總額 (不含 BD Lost)`}>
+                <p
+                  className="text-[10px] text-slate-400 dark:text-slate-400 pt-0.5 text-center truncate"
+                  title={`加權金額 ${formatCurrency(kpis.expectedRevenue)} ÷ 潛在總額 (不含 BD Lost)`}
+                >
                   加權金額 {formatCompactCurrency(kpis.expectedRevenue)} ÷ 潛在總額 (不含流失)
                 </p>
               </div>
             </div>
 
             {/* KPI 2: BD Case Count (進行中 / 已成交 / 已流失) */}
-            <div className="bg-white dark:bg-slate-900/95 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-xs hover:shadow-md transition-shadow flex flex-col justify-between min-h-[158px]">
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <span className="text-xs font-bold text-slate-500 dark:text-slate-400 block">
-                    BD Case Count
-                  </span>
-                  <div className="flex items-baseline gap-1 mt-1.5">
-                    <h3 className="text-[22px] 2xl:text-[24px] font-black text-slate-900 dark:text-white tracking-tight tabular-nums">
-                      {kpis.totalOpportunitiesCount}
-                    </h3>
-                    <span className="text-xs font-bold text-slate-500 dark:text-slate-400">案</span>
-                  </div>
-                </div>
+            <div className="bg-white dark:bg-slate-900/95 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-xs hover:shadow-md transition-shadow flex flex-col justify-between min-h-[168px]">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-extrabold text-slate-500 dark:text-slate-400">
+                  BD Case Count
+                </span>
                 <KpiBriefcaseIcon
                   variant={variant}
                   lostCount={kpis.lostCount}
-                  className="w-10 h-10 flex-shrink-0 -mt-0.5"
+                  className="w-9 h-9 flex-shrink-0"
                 />
               </div>
 
-              <div className="mt-3 space-y-2">
+              <div className="py-1.5 flex items-baseline justify-center gap-1.5">
+                <h3 className="text-3xl xl:text-[32px] 2xl:text-[34px] font-black text-slate-900 dark:text-white tracking-tight tabular-nums leading-tight">
+                  {kpis.totalOpportunitiesCount}
+                </h3>
+                <span className="text-sm font-bold text-slate-500 dark:text-slate-400">案</span>
+              </div>
+
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-bold text-slate-500 dark:text-slate-400">案件分佈</span>
+                  <span className="font-black font-mono tabular-nums text-slate-500 dark:text-slate-400">
+                    {kpis.openCount} / {kpis.wonCount} / {kpis.lostCount}
+                  </span>
+                </div>
                 {/* 3-Segment Horizontal Ratio Bar */}
                 <div className="h-1.5 w-full rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden flex gap-0.5">
                   {kpis.totalOpportunitiesCount > 0 ? (
@@ -760,7 +764,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
                 </div>
 
                 {/* Colored Dot Legend */}
-                <div className="flex items-center justify-between gap-1 text-[10px] font-bold text-slate-600 dark:text-slate-300 tabular-nums">
+                <div className="flex items-center justify-around gap-1 pt-0.5 text-[10px] font-bold text-slate-600 dark:text-slate-300 tabular-nums">
                   <span className="inline-flex items-center gap-1 whitespace-nowrap">
                     <span className={`w-1.5 h-1.5 rounded-full ${openDotBg}`} />
                     進行中 {kpis.openCount}
@@ -778,23 +782,24 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
             </div>
 
             {/* KPI 3: BD WON AMT + BD WON % (固定同色系 Emerald 綠色強調) */}
-            <div className="relative overflow-hidden bg-white dark:bg-slate-900 dark:bg-gradient-to-br dark:from-emerald-950/75 dark:via-emerald-950/35 dark:to-slate-900/95 border border-emerald-200/80 dark:border-emerald-800/60 border-l-4 border-l-emerald-500 dark:border-l-emerald-400 rounded-2xl p-4 shadow-xs hover:shadow-md transition-shadow flex flex-col justify-between min-h-[158px]">
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <span className="text-xs font-bold text-emerald-700 dark:text-emerald-300/90 block">
-                    BD WON AMT
-                  </span>
-                  <h3
-                    className="text-[19px] 2xl:text-[22px] font-black text-slate-900 dark:text-white tracking-tight tabular-nums mt-1.5 truncate"
-                    title={formatCurrency(kpis.wonAmount)}
-                  >
-                    {formatCurrency(kpis.wonAmount)}
-                  </h3>
-                </div>
-                <KpiWonIcon className="w-10 h-10 flex-shrink-0 -mt-0.5" />
+            <div className="relative overflow-hidden bg-white dark:bg-slate-900 dark:bg-gradient-to-br dark:from-emerald-950/75 dark:via-emerald-950/35 dark:to-slate-900/95 border border-emerald-200/80 dark:border-emerald-800/60 border-l-4 border-l-emerald-500 dark:border-l-emerald-400 rounded-2xl p-4 shadow-xs hover:shadow-md transition-shadow flex flex-col justify-between min-h-[168px]">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-extrabold text-emerald-700 dark:text-emerald-300/90">
+                  BD WON AMT
+                </span>
+                <KpiWonIcon className="w-9 h-9 flex-shrink-0" />
               </div>
 
-              <div className="mt-3 space-y-1.5">
+              <div className="py-1.5 text-center">
+                <h3
+                  className="text-2xl xl:text-[25px] 2xl:text-[28px] font-black text-slate-900 dark:text-white tracking-tight tabular-nums leading-tight truncate"
+                  title={formatCurrency(kpis.wonAmount)}
+                >
+                  {formatCurrency(kpis.wonAmount)}
+                </h3>
+              </div>
+
+              <div className="space-y-1.5">
                 <div className="flex items-center justify-between text-xs gap-1">
                   <span className="font-bold text-slate-600 dark:text-slate-300 truncate">
                     BD WON % ({kpis.wonCount}/{kpis.totalOpportunitiesCount})
@@ -809,30 +814,31 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
                     style={{ width: `${Math.min(100, Math.max(0, kpis.wonRate))}%` }}
                   />
                 </div>
-                <p className="text-[10px] text-slate-500 dark:text-slate-400 pt-0.5 truncate">
+                <p className="text-[10px] text-slate-500 dark:text-slate-400 pt-0.5 text-center truncate">
                   已成交 {kpis.wonCount} 案 · 佔潛在總額 {wonAmountShare.toFixed(1)}%
                 </p>
               </div>
             </div>
 
             {/* KPI 4: BD LOST AMT + BD LOST % (固定同色系 Rose 紅色強調) */}
-            <div className="relative overflow-hidden bg-white dark:bg-slate-900 dark:bg-gradient-to-br dark:from-rose-950/75 dark:via-rose-950/35 dark:to-slate-900/95 border border-rose-200/80 dark:border-rose-800/60 border-l-4 border-l-rose-500 dark:border-l-rose-400 rounded-2xl p-4 shadow-xs hover:shadow-md transition-shadow flex flex-col justify-between min-h-[158px]">
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <span className="text-xs font-bold text-rose-700 dark:text-rose-300/90 block">
-                    BD LOST AMT
-                  </span>
-                  <h3
-                    className="text-[19px] 2xl:text-[22px] font-black text-slate-900 dark:text-white tracking-tight tabular-nums mt-1.5 truncate"
-                    title={formatCurrency(kpis.lostAmount)}
-                  >
-                    {formatCurrency(kpis.lostAmount)}
-                  </h3>
-                </div>
-                <KpiLostIcon className="w-10 h-10 flex-shrink-0 -mt-0.5" />
+            <div className="relative overflow-hidden bg-white dark:bg-slate-900 dark:bg-gradient-to-br dark:from-rose-950/75 dark:via-rose-950/35 dark:to-slate-900/95 border border-rose-200/80 dark:border-rose-800/60 border-l-4 border-l-rose-500 dark:border-l-rose-400 rounded-2xl p-4 shadow-xs hover:shadow-md transition-shadow flex flex-col justify-between min-h-[168px]">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-extrabold text-rose-700 dark:text-rose-300/90">
+                  BD LOST AMT
+                </span>
+                <KpiLostIcon className="w-9 h-9 flex-shrink-0" />
               </div>
 
-              <div className="mt-3 space-y-1.5">
+              <div className="py-1.5 text-center">
+                <h3
+                  className="text-2xl xl:text-[25px] 2xl:text-[28px] font-black text-slate-900 dark:text-white tracking-tight tabular-nums leading-tight truncate"
+                  title={formatCurrency(kpis.lostAmount)}
+                >
+                  {formatCurrency(kpis.lostAmount)}
+                </h3>
+              </div>
+
+              <div className="space-y-1.5">
                 <div className="flex items-center justify-between text-xs gap-1">
                   <span className="font-bold text-slate-600 dark:text-slate-300 truncate">
                     BD LOST % ({kpis.lostCount}/{kpis.totalOpportunitiesCount})
@@ -847,31 +853,34 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
                     style={{ width: `${Math.min(100, Math.max(0, kpis.lostRate))}%` }}
                   />
                 </div>
-                <p className="text-[10px] text-slate-500 dark:text-slate-400 pt-0.5 truncate">
+                <p className="text-[10px] text-slate-500 dark:text-slate-400 pt-0.5 text-center truncate">
                   已流失 {kpis.lostCount} 案 · 佔潛在總額 {lostAmountShare.toFixed(1)}%
                 </p>
               </div>
             </div>
 
-            {/* KPI 5: 活動完成率 (獨立營運效率指標，與金額解耦) */}
-            <div className="bg-white dark:bg-slate-900/95 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-xs hover:shadow-md transition-shadow flex flex-col justify-between min-h-[158px]">
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <span className="text-xs font-bold text-slate-500 dark:text-slate-400 block">
-                    活動完成率
-                  </span>
-                  <h3 className="text-[22px] 2xl:text-[24px] font-black text-slate-900 dark:text-white tracking-tight tabular-nums mt-1.5">
-                    {kpis.activityCompletionRate.toFixed(1)}%
-                  </h3>
-                </div>
-                <KpiTargetIcon variant={variant} className="w-10 h-10 flex-shrink-0 -mt-0.5" />
+            {/* KPI 5: 活動完成率 (直接顯示 已完成/總數，不設分級刻度) */}
+            <div className="bg-white dark:bg-slate-900/95 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-xs hover:shadow-md transition-shadow flex flex-col justify-between min-h-[168px]">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-extrabold text-slate-500 dark:text-slate-400">
+                  活動完成率
+                </span>
+                <KpiTargetIcon variant={variant} className="w-9 h-9 flex-shrink-0" />
               </div>
 
-              <div className="mt-3 space-y-1.5">
+              <div className="py-1.5 text-center">
+                <h3 className="text-3xl xl:text-[32px] 2xl:text-[34px] font-black text-slate-900 dark:text-white tracking-tight tabular-nums leading-tight">
+                  {kpis.activityCompletionRate.toFixed(1)}%
+                </h3>
+              </div>
+
+              <div className="space-y-1.5">
                 <div className="flex items-center justify-between text-xs gap-1">
-                  <span className="font-bold text-slate-500 dark:text-slate-400">執行進度</span>
-                  <span className={`px-1.5 py-0.5 rounded-md text-[10px] font-black border ${activityStatus.cls}`}>
-                    {activityStatus.label}
+                  <span className="font-bold text-slate-500 dark:text-slate-400">完成次數</span>
+                  <span
+                    className={`px-1.5 py-0.5 rounded-md text-[11px] font-black font-mono tabular-nums border ${theme.accentSoftBg} ${theme.accentText} ${theme.accentBorder}`}
+                  >
+                    {kpis.completedActivitiesCount}/{kpis.totalActivitiesCount}
                   </span>
                 </div>
                 <div className="h-1.5 w-full rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
@@ -880,8 +889,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
                     style={{ width: `${Math.min(100, Math.max(0, kpis.activityCompletionRate))}%` }}
                   />
                 </div>
-                <p className="text-[10px] text-slate-400 dark:text-slate-400 pt-0.5 truncate">
-                  已完成 {kpis.completedActivitiesCount}/{kpis.totalActivitiesCount} 項 · 獨立營運效率指標
+                <p className="text-[10px] text-slate-400 dark:text-slate-400 pt-0.5 text-center truncate">
+                  已完成 {kpis.completedActivitiesCount} 項 · 待辦 {pendingActivitiesCount} 項
                 </p>
               </div>
             </div>
