@@ -1,4 +1,5 @@
 // B2B CRM Upgraded Mock Database Engine (LocalStorage-based)
+import { formatLocalDate, getLocalTodayIso, parseLocalCalendarDate } from '../utils/dateUtils';
 
 export type UserRole = 'ADMIN' | 'BU_HEAD' | 'AM';
 
@@ -424,7 +425,7 @@ export const generateId = (prefix: string): string => {
 // 自動補齊舊版 stages 缺失的 outcome 欄位，並鎖定 WON=100% / LOST=100%（以 outcome 區分，讓漏斗能視覺化顯示 LOST 金額，業績與 BD Progress % 僅採計 OPEN+WON）
 const normalizeStages = (stages: Stage[]): { stages: Stage[]; changed: boolean } => {
   let changed = false;
-  const sorted = [...stages].sort((a, b) => a.displayOrder - b.displayOrder);
+  const sorted = stages.toSorted((a, b) => a.displayOrder - b.displayOrder);
   const activeSorted = sorted.filter(s => s.isActive);
   const inferredLostId = activeSorted[activeSorted.length - 1]?.id;
   const inferredWonId = activeSorted.length >= 2 ? activeSorted[activeSorted.length - 2]?.id : undefined;
@@ -615,10 +616,13 @@ export const getOppCreatedDate = (opp: Opportunity): string => {
   const schedDates = Object.values(opp.schedules || {}).filter(Boolean).sort();
   if (schedDates.length > 0) return schedDates[0];
   if (opp.expectedCloseDate) {
-    const ts = new Date(opp.expectedCloseDate).getTime() - 30 * 86400000;
-    if (!Number.isNaN(ts)) return new Date(ts).toISOString().slice(0, 10);
+    const d = parseLocalCalendarDate(opp.expectedCloseDate);
+    if (!Number.isNaN(d.getTime())) {
+      d.setDate(d.getDate() - 30);
+      return formatLocalDate(d);
+    }
   }
-  return new Date().toISOString().slice(0, 10);
+  return getLocalTodayIso();
 };
 
 // 取得商機結案日期（若目前在 WON/LOST 階段）
@@ -628,7 +632,7 @@ export const getOppClosedDate = (opp: Opportunity, stages: Stage[]): string | nu
   if (opp.closedAt) return opp.closedAt;
   if (opp.schedules?.[st.id]) return opp.schedules[st.id];
   if (opp.expectedCloseDate) return opp.expectedCloseDate;
-  return new Date().toISOString().slice(0, 10);
+  return getLocalTodayIso();
 };
 
 // 判斷商機是否落於月區間 [startMonth, endMonth]：
@@ -1042,8 +1046,8 @@ export const db = {
       opp.winProbability = firstOpen.defaultWinProbability;
     }
 
-    // 4. 自動記錄 createdAt / closedAt 時間戳以支援月區間報表
-    const todayStr = new Date().toISOString().slice(0, 10);
+    // 4. 自動記錄 createdAt / closedAt 時間戳以支援月區間報表（採用本地日曆日期避免跨午夜偏移）
+    const todayStr = getLocalTodayIso();
     if (!opp.createdAt) {
       opp.createdAt = existing?.createdAt || todayStr;
     }

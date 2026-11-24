@@ -21,6 +21,7 @@ import type {
   SalesTarget,
 } from '../services/db';
 import { exportToCsv } from '../utils/exportCsv';
+import { getLocalTodayIso, parseLocalCalendarDate } from '../utils/dateUtils';
 import {
   BarChart3,
   FolderTree,
@@ -303,7 +304,7 @@ export const ManagementMetrics: React.FC = () => {
   // C) 週報 / 月報 期間活動與目標達成檢核
   // =========================================================================
   const getWeekKey = (dateStr: string) => {
-    const d = new Date(dateStr);
+    const d = parseLocalCalendarDate(dateStr);
     if (Number.isNaN(d.getTime())) return '未知';
     const day = d.getDay() || 7;
     const monday = new Date(d.getFullYear(), d.getMonth(), d.getDate() - day + 1);
@@ -319,7 +320,7 @@ export const ManagementMetrics: React.FC = () => {
     const toKey = (dateStr: string) => (periodMode === 'month' ? dateStr.slice(0, 7) : getWeekKey(dateStr));
 
     // Include current month/week by default so table isn't blank
-    const todayStr = new Date().toISOString().slice(0, 10);
+    const todayStr = getLocalTodayIso();
     keys.add(toKey(todayStr));
 
     for (const o of opportunities) {
@@ -474,7 +475,7 @@ export const ManagementMetrics: React.FC = () => {
       r.targetAmt,
       r.achievePct !== null ? r.achievePct.toFixed(1) : '-',
     ]);
-    exportToCsv(`EZB2B_管理指標_${periodMode}_${new Date().toISOString().slice(0, 10)}.csv`, headers, rows);
+    exportToCsv(`EZB2B_管理指標_${periodMode}_${getLocalTodayIso()}.csv`, headers, rows);
   };
 
   if (loading) {
@@ -754,20 +755,21 @@ export const ManagementMetrics: React.FC = () => {
 
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse text-xs">
+            <caption className="visually-hidden">活動計數與量化金額統計表</caption>
             <thead>
               <tr className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400">
-                <th className="py-2.5 px-3 font-bold">
+                <th scope="col" className="py-2.5 px-3 font-bold">
                   {activityDimension === 'company' ? '客戶公司' : activityDimension === 'org' ? '組織部門' : 'Sales Rep'}
                 </th>
-                <th className="py-2.5 px-3 font-bold text-center">總計數</th>
+                <th scope="col" className="py-2.5 px-3 font-bold text-center">總計數</th>
                 {activityTypes.map(t => (
-                  <th key={t.id} className="py-2.5 px-2.5 font-bold text-center whitespace-nowrap">
+                  <th scope="col" key={t.id} className="py-2.5 px-2.5 font-bold text-center whitespace-nowrap">
                     {t.name}
                   </th>
                 ))}
-                <th className="py-2.5 px-3 font-bold text-center">活動完成率</th>
-                <th className="py-2.5 px-3 font-bold text-center">最近互動日</th>
-                <th className="py-2.5 px-3 font-bold text-right">
+                <th scope="col" className="py-2.5 px-3 font-bold text-center">活動完成率</th>
+                <th scope="col" className="py-2.5 px-3 font-bold text-center">最近互動日</th>
+                <th scope="col" className="py-2.5 px-3 font-bold text-right">
                   量化總額 {hasAnyUnitCost ? '(NTD)' : '(未設單價)'}
                 </th>
               </tr>
@@ -855,17 +857,18 @@ export const ManagementMetrics: React.FC = () => {
 
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse text-xs">
+            <caption className="visually-hidden">週報與月報目標達成檢核表</caption>
             <thead>
               <tr className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400">
-                <th className="py-2.5 px-3 font-bold">{periodMode === 'month' ? '月份' : '週次'}</th>
-                <th className="py-2.5 px-3 font-bold text-right">新建商機</th>
-                <th className="py-2.5 px-3 font-bold text-right">成交 (BD Won)</th>
-                <th className="py-2.5 px-3 font-bold text-center">流失案數</th>
-                <th className="py-2.5 px-3 font-bold text-center">期間活動 (完成率)</th>
+                <th scope="col" className="py-2.5 px-3 font-bold">{periodMode === 'month' ? '月份' : '週次'}</th>
+                <th scope="col" className="py-2.5 px-3 font-bold text-right">新建商機</th>
+                <th scope="col" className="py-2.5 px-3 font-bold text-right">成交 (BD Won)</th>
+                <th scope="col" className="py-2.5 px-3 font-bold text-center">流失案數</th>
+                <th scope="col" className="py-2.5 px-3 font-bold text-center">期間活動 (完成率)</th>
                 {periodMode === 'month' && (
                   <>
-                    <th className="py-2.5 px-3 font-bold text-right">月成交目標 (可輸入)</th>
-                    <th className="py-2.5 px-3 font-bold text-right">目標達成率</th>
+                    <th scope="col" className="py-2.5 px-3 font-bold text-right">月成交目標 (可輸入)</th>
+                    <th scope="col" className="py-2.5 px-3 font-bold text-right">目標達成率</th>
                   </>
                 )}
               </tr>

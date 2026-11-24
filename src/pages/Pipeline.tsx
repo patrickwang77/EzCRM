@@ -1,6 +1,8 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useId } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useLayout } from '../context/LayoutContext';
+import { useFeedback } from '../context/FeedbackContext';
+import { ModalDialog } from '../components/ModalDialog';
 import {
   db,
   getEligibleSalesReps,
@@ -19,6 +21,12 @@ import type {
   Activity,
 } from '../services/db';
 import { exportToCsv } from '../utils/exportCsv';
+import {
+  formatLocalDate,
+  getLocalTodayIso,
+  getLocalDateOffsetIso,
+  getLocalDateTimeOffset,
+} from '../utils/dateUtils';
 import { inferPreviewTags, getTagToneClass } from '../utils/aiTagPreview';
 import { getStageColor } from '../utils/stageColors';
 import {
@@ -40,13 +48,16 @@ import {
   GanttChartSquare,
   Sparkles,
 } from 'lucide-react';
-import confetti from 'canvas-confetti';
 
 type PipelineViewMode = 'pipeline' | 'table' | 'schedule';
 type GanttZoom = 'week' | 'month' | 'quarter';
 
 export const Pipeline: React.FC = () => {
   const { currentUser } = useAuth();
+  const { notify, confirm } = useFeedback();
+  const oppModalTitleId = useId();
+  const drawerTitleId = useId();
+  const perfModalTitleId = useId();
   const {
     variant,
     theme,
@@ -162,7 +173,7 @@ export const Pipeline: React.FC = () => {
   const handleSaveQuickActivity = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedOppForDrawer || !quickActDesc || !quickActDueDate) {
-      alert('請輸入完整描述與到期日');
+      notify('請輸入完整描述與到期日', 'warning');
       return;
     }
     const actData: Activity = {
@@ -177,12 +188,12 @@ export const Pipeline: React.FC = () => {
     try {
       await db.saveActivity(actData);
       setQuickActDesc('');
-      const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
-      tomorrow.setMinutes(tomorrow.getMinutes() - tomorrow.getTimezoneOffset());
-      setQuickActDueDate(tomorrow.toISOString().slice(0, 16));
+      setQuickActDueDate(getLocalDateTimeOffset(1, 10, 0).replace(' ', 'T'));
       loadDrawerActivities(selectedOppForDrawer.id);
       bumpDataVersion();
+      notify('已登記跟進活動', 'success');
     } catch (err) {
+      notify('登記活動失敗', 'error');
       console.error('Failed to save quick activity', err);
     }
   };
@@ -246,9 +257,7 @@ export const Pipeline: React.FC = () => {
       if (actTypes.length > 0 && !quickActType) {
         setQuickActType(actTypes[0].name);
       }
-      const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
-      tomorrow.setMinutes(tomorrow.getMinutes() - tomorrow.getTimezoneOffset());
-      setQuickActDueDate(tomorrow.toISOString().slice(0, 16));
+      setQuickActDueDate(getLocalDateTimeOffset(1, 10, 0).replace(' ', 'T'));
     } catch (err) {
       console.error('Failed to load pipeline data', err);
     }
@@ -330,11 +339,9 @@ export const Pipeline: React.FC = () => {
       setProductLineId(productLines[0]?.id || '');
       setMonthlyQuantity('');
       setUnitPrice('');
-      setOppSchedules(targetStageId ? { [targetStageId]: new Date().toISOString().split('T')[0] } : {});
+      setOppSchedules(targetStageId ? { [targetStageId]: getLocalTodayIso() } : {});
       setOppBudgets([]);
-      setExpectedCloseDate(
-        new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
-      );
+      setExpectedCloseDate(getLocalDateOffsetIso(30));
     }
     setIsModalOpen(true);
   };
@@ -342,28 +349,28 @@ export const Pipeline: React.FC = () => {
   const handleSaveOpportunity = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !title || !userId) {
-      alert('請填寫所有必要欄位');
+      notify('請填寫所有必要欄位', 'warning');
       return;
     }
 
     let finalCompanyId = companyId;
     if (inlineNewCompany) {
       if (!inlineCompName.trim()) {
-        alert('請輸入新客戶公司名稱');
+        notify('請輸入新客戶公司名稱', 'warning');
         return;
       }
       const newComp: Company = {
         id: generateId('comp'),
         name: inlineCompName.trim(),
         industry: inlineCompIndustry.trim() || '一般企業',
-        createdAt: new Date().toISOString().split('T')[0],
+        createdAt: getLocalTodayIso(),
       };
       await db.saveCompany(newComp);
       finalCompanyId = newComp.id;
     }
 
     if (!finalCompanyId) {
-      alert('請選擇或建立客戶公司');
+      notify('請選擇或建立客戶公司', 'warning');
       return;
     }
 
@@ -372,7 +379,7 @@ export const Pipeline: React.FC = () => {
     const calculatedAmount = numericQty * numericPrice;
 
     let latestDate = expectedCloseDate;
-    const sortedStagesDesc = [...stages].sort((a, b) => b.displayOrder - a.displayOrder);
+    const sortedStagesDesc = stages.toSorted((a, b) => b.displayOrder - a.displayOrder);
     for (const s of sortedStagesDesc) {
       if (oppSchedules[s.id]) {
         latestDate = oppSchedules[s.id];
@@ -405,7 +412,7 @@ export const Pipeline: React.FC = () => {
 
     try {
       await db.saveOpportunity(oppData);
-      const activeStages = [...stages].sort((a, b) => a.displayOrder - b.displayOrder);
+      const activeStages = stages.toSorted((a, b) => a.displayOrder - b.displayOrder);
       const wonStageId = activeStages[activeStages.length - 2]?.id || 'stage-5';
       if (currentStageId === wonStageId && (!editingOpp || editingOpp.stageId !== wonStageId)) {
         triggerConfetti();
@@ -418,18 +425,34 @@ export const Pipeline: React.FC = () => {
   };
 
   const handleDeleteOpportunity = async (id: string) => {
-    if (!window.confirm('確定要刪除此商機嗎？這也會一併刪除關聯的活動紀錄！')) return;
+    const accepted = await confirm({
+      title: '確認刪除此商機？',
+      message: '這也會一併刪除關聯的所有活動紀錄，且無法復原。',
+      confirmLabel: '確認刪除',
+      tone: 'danger',
+    });
+    if (!accepted) return;
     try {
       await db.deleteOpportunity(id);
       setIsModalOpen(false);
       bumpDataVersion();
+      notify('已刪除商機', 'success');
     } catch (err) {
+      notify('刪除商機失敗', 'error');
       console.error('Failed to delete opportunity', err);
     }
   };
 
-  const triggerConfetti = () => {
-    confetti({ particleCount: 150, spread: 80, origin: { y: 0.6 } });
+  const triggerConfetti = async () => {
+    if (typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      return;
+    }
+    try {
+      const { default: confetti } = await import('canvas-confetti');
+      confetti({ particleCount: 150, spread: 80, origin: { y: 0.6 } });
+    } catch {
+      // Non-critical celebratory effect
+    }
   };
 
   const handleDragStart = (e: React.DragEvent, oppId: string) => {
@@ -538,7 +561,7 @@ export const Pipeline: React.FC = () => {
         o.expectedCloseDate,
       ];
     });
-    exportToCsv(`CRM_BD_Pipeline_${new Date().toISOString().slice(0, 10)}.csv`, headers, rows);
+    exportToCsv(`CRM_BD_Pipeline_${getLocalTodayIso()}.csv`, headers, rows);
   };
 
   const scrollKanban = (delta: number) => {
@@ -848,7 +871,7 @@ export const Pipeline: React.FC = () => {
                         <div
                           style={{ left: `${todayPct}%` }}
                           className="absolute top-0 bottom-0 w-0.5 bg-rose-500/75 z-10 pointer-events-none"
-                          title={`今日：${today.toISOString().slice(0, 10)}`}
+                          title={`今日：${formatLocalDate(today)}`}
                         />
                       )}
 
@@ -927,17 +950,18 @@ export const Pipeline: React.FC = () => {
     <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden shadow-xs">
       <div className="overflow-x-auto">
         <table className="w-full text-left border-collapse text-xs">
+          <caption className="visually-hidden">BD Pipeline 商機明細表</caption>
           <thead>
             <tr className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400">
-              <th className="py-3 px-4 font-bold">商機名稱</th>
-              <th className="py-3 px-4 font-bold">客戶公司</th>
-              <th className="py-3 px-4 font-bold">階段 / 贏率</th>
-              <th className="py-3 px-4 font-bold">Product Line</th>
-              <th className="py-3 px-4 font-bold">AI 標籤預覽</th>
-              <th className="py-3 px-4 font-bold text-right">月估金額</th>
-              <th className="py-3 px-4 font-bold text-right">加權金額</th>
-              <th className="py-3 px-4 font-bold">負責 AM</th>
-              <th className="py-3 px-4 font-bold text-center">操作</th>
+              <th scope="col" className="py-3 px-4 font-bold">商機名稱</th>
+              <th scope="col" className="py-3 px-4 font-bold">客戶公司</th>
+              <th scope="col" className="py-3 px-4 font-bold">階段 / 贏率</th>
+              <th scope="col" className="py-3 px-4 font-bold">Product Line</th>
+              <th scope="col" className="py-3 px-4 font-bold">AI 標籤預覽</th>
+              <th scope="col" className="py-3 px-4 font-bold text-right">月估金額</th>
+              <th scope="col" className="py-3 px-4 font-bold text-right">加權金額</th>
+              <th scope="col" className="py-3 px-4 font-bold">負責 AM</th>
+              <th scope="col" className="py-3 px-4 font-bold text-center">操作</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -1491,20 +1515,27 @@ export const Pipeline: React.FC = () => {
       {subTab === 'table' && renderTableView()}
       {subTab === 'schedule' && renderGanttChart()}
 
-      {/* 新增/編輯商機 2-Tab Modal */}
-      {isModalOpen && (
-        <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl w-full max-w-lg shadow-2xl p-6 relative overflow-hidden">
-            <button
-              onClick={() => setIsModalOpen(false)}
-              className="absolute right-5 top-5 p-1.5 bg-slate-100 dark:bg-slate-800 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-xl"
-            >
-              <X className="w-5 h-5" />
-            </button>
+      {/* 新增/編輯商機 2-Tab Modal (原生 <dialog>) */}
+      <ModalDialog
+        open={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        ariaLabelledBy={oppModalTitleId}
+        lightDismiss
+        className="max-w-lg"
+      >
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl w-full shadow-2xl p-6 relative overflow-hidden text-slate-800 dark:text-slate-100">
+          <button
+            type="button"
+            onClick={() => setIsModalOpen(false)}
+            aria-label="關閉商機編輯視窗"
+            className="absolute right-5 top-5 p-1.5 bg-slate-100 dark:bg-slate-800 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-xl"
+          >
+            <X className="w-5 h-5" aria-hidden="true" />
+          </button>
 
-            <h3 className="text-base font-extrabold text-slate-800 dark:text-white mb-5">
-              {editingOpp ? '編輯商機詳情' : '新增銷售商機'}
-            </h3>
+          <h1 id={oppModalTitleId} className="text-base font-extrabold text-slate-800 dark:text-white mb-5">
+            {editingOpp ? '編輯商機詳情' : '新增銷售商機'}
+          </h1>
 
             <div className="flex border-b border-slate-100 dark:border-slate-800 mb-5 text-center">
               <button
@@ -1801,40 +1832,44 @@ export const Pipeline: React.FC = () => {
               </div>
             </form>
           </div>
-        </div>
-      )}
+      </ModalDialog>
 
-      {/* 商機時程與活動歷程 Drawer (Used in Variants A & B) */}
-      {isDrawerOpen && selectedOppForDrawer && (() => {
-        const company = companies.find(c => c.id === selectedOppForDrawer.companyId);
-        const assignedUser = users.find(u => u.id === selectedOppForDrawer.userId);
-        const tags = getOppTags(selectedOppForDrawer);
-        return (
-          <>
-            <div
-              className="fixed inset-0 bg-slate-950/50 backdrop-blur-sm z-40"
-              onClick={() => setIsDrawerOpen(false)}
-            />
-            <div className="fixed inset-y-0 right-0 w-[480px] max-w-full bg-white dark:bg-slate-900 shadow-2xl z-50 flex flex-col border-l border-slate-200 dark:border-slate-800">
+      {/* 商機時程與活動歷程 Drawer (原生 <dialog> placement="right") */}
+      <ModalDialog
+        open={isDrawerOpen && Boolean(selectedOppForDrawer)}
+        onClose={() => setIsDrawerOpen(false)}
+        ariaLabelledBy={drawerTitleId}
+        placement="right"
+        lightDismiss
+        className="max-w-[480px]"
+      >
+        {selectedOppForDrawer && (() => {
+          const company = companies.find(c => c.id === selectedOppForDrawer.companyId);
+          const assignedUser = users.find(u => u.id === selectedOppForDrawer.userId);
+          const tags = getOppTags(selectedOppForDrawer);
+          return (
+            <div className="h-dvh w-full bg-white dark:bg-slate-900 shadow-2xl flex flex-col border-l border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-100">
               <div className="p-5 border-b border-slate-100 dark:border-slate-800 flex items-start justify-between">
                 <div>
-                  <h3 className="text-base font-extrabold text-slate-800 dark:text-white leading-snug">
+                  <h1 id={drawerTitleId} className="text-base font-extrabold text-slate-800 dark:text-white leading-snug">
                     {selectedOppForDrawer.title}
-                  </h3>
+                  </h1>
                   <div className="flex flex-wrap items-center gap-2 mt-2">
                     <span className="text-[11px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 px-2 py-0.5 rounded flex items-center gap-1">
-                      <Building2 className="w-3 h-3 text-slate-400" /> {company?.name}
+                      <Building2 className="w-3 h-3 text-slate-400" aria-hidden="true" /> {company?.name}
                     </span>
                     <span className={`text-[11px] font-bold px-2 py-0.5 rounded flex items-center gap-1 ${theme.accentSoftBg} ${theme.accentText}`}>
-                      <UserIcon className="w-3 h-3" /> AM: {assignedUser?.name}
+                      <UserIcon className="w-3 h-3" aria-hidden="true" /> AM: {assignedUser?.name}
                     </span>
                   </div>
                 </div>
                 <button
+                  type="button"
                   onClick={() => setIsDrawerOpen(false)}
+                  aria-label="關閉商機詳情抽屜"
                   className="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
                 >
-                  <X className="w-5 h-5" />
+                  <X className="w-5 h-5" aria-hidden="true" />
                 </button>
               </div>
 
@@ -1999,23 +2034,27 @@ export const Pipeline: React.FC = () => {
                 </div>
               </div>
             </div>
-          </>
-        );
-      })()}
+          );
+        })()}
+      </ModalDialog>
 
-      {/* 業務個人業績與管線 Mini-Modal */}
-      {isPerfModalOpen && selectedUserForPerf && (
-        <div className="fixed inset-0 flex items-center justify-center z-50 p-4">
-          <div
-            className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm"
-            onClick={() => setIsPerfModalOpen(false)}
-          />
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-2xl z-50 w-[520px] max-w-full flex flex-col relative text-slate-800 dark:text-slate-100">
+      {/* 業務個人業績與管線 Mini-Modal (原生 <dialog>) */}
+      <ModalDialog
+        open={isPerfModalOpen && Boolean(selectedUserForPerf)}
+        onClose={() => setIsPerfModalOpen(false)}
+        ariaLabelledBy={perfModalTitleId}
+        lightDismiss
+        className="max-w-[520px]"
+      >
+        {selectedUserForPerf && (
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-2xl w-full flex flex-col relative text-slate-800 dark:text-slate-100">
             <button
+              type="button"
               onClick={() => setIsPerfModalOpen(false)}
+              aria-label="關閉業務績效視窗"
               className="absolute top-4 right-4 p-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
             >
-              <X className="w-4 h-4" />
+              <X className="w-4 h-4" aria-hidden="true" />
             </button>
 
             <div className="flex items-center gap-4 border-b border-slate-100 dark:border-slate-800 pb-4">
@@ -2023,9 +2062,9 @@ export const Pipeline: React.FC = () => {
                 {selectedUserForPerf.name[0]}
               </div>
               <div>
-                <h3 className="text-base font-extrabold text-slate-800 dark:text-slate-100">
+                <h1 id={perfModalTitleId} className="text-base font-extrabold text-slate-800 dark:text-slate-100">
                   {selectedUserForPerf.name}
-                </h3>
+                </h1>
                 <p className="text-xs text-slate-400 font-mono mt-0.5">{selectedUserForPerf.email}</p>
               </div>
             </div>
@@ -2087,8 +2126,8 @@ export const Pipeline: React.FC = () => {
               </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </ModalDialog>
     </div>
   );
 };

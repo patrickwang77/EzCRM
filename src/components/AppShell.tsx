@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useLayout, VARIANT_THEMES } from '../context/LayoutContext';
 import type { LayoutVariant } from '../context/LayoutContext';
+import { useFeedback } from '../context/FeedbackContext';
 import { CopilotPanel } from './CopilotPanel';
 import {
   LayoutDashboard,
@@ -35,6 +36,7 @@ interface AppShellProps {
 
 export const AppShell: React.FC<AppShellProps> = ({ children, activeTab, setActiveTab }) => {
   const { currentUser, availableUsers, switchUser } = useAuth();
+  const { notify } = useFeedback();
   const {
     variant,
     setVariant,
@@ -47,23 +49,90 @@ export const AppShell: React.FC<AppShellProps> = ({ children, activeTab, setActi
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(() => {
-    return localStorage.getItem('crm_sidebar_collapsed') === 'true';
-  });
-
-  const [isDark, setIsDark] = useState(() => {
-    const saved = localStorage.getItem('theme');
-    return saved === 'dark' || (!saved && window.matchMedia('(prefers-color-scheme: dark)').matches);
-  });
-
-  useEffect(() => {
-    if (isDark) {
-      document.documentElement.classList.add('dark');
-      localStorage.setItem('theme', 'dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-      localStorage.setItem('theme', 'light');
+    try {
+      return localStorage.getItem('crm_sidebar_collapsed') === 'true';
+    } catch {
+      return false;
     }
-  }, [isDark]);
+  });
+
+  // Two-state color-scheme override synced with <meta name="color-scheme"> (dark-mode-toggle guide)
+  const readStoredScheme = (): 'light' | 'dark' | null => {
+    try {
+      const saved = localStorage.getItem('color-scheme') || localStorage.getItem('theme');
+      return saved === 'dark' || saved === 'light' ? saved : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const [storedScheme, setStoredScheme] = useState<'light' | 'dark' | null>(readStoredScheme);
+  const [osPrefersDark, setOsPrefersDark] = useState<boolean>(() =>
+    typeof window !== 'undefined' && window.matchMedia
+      ? window.matchMedia('(prefers-color-scheme: dark)').matches
+      : false
+  );
+
+  const isDark = storedScheme ? storedScheme === 'dark' : osPrefersDark;
+
+  // Listen for OS color-scheme changes without erasing explicit user overrides
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    const onChange = (e: MediaQueryListEvent) => setOsPrefersDark(e.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+
+  // Cross-tab color-scheme sync via storage event
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === 'color-scheme' || e.key === 'theme') {
+        setStoredScheme(readStoredScheme());
+      }
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
+
+  // Synchronize <meta name="color-scheme"> and root .dark class
+  useEffect(() => {
+    const metaContent = storedScheme ?? 'light dark';
+    const meta = document.querySelector('meta[name="color-scheme"]');
+    if (meta) {
+      meta.setAttribute('content', metaContent);
+    }
+    document.documentElement.classList.toggle('dark', isDark);
+  }, [storedScheme, isDark]);
+
+  // Toggle toward opposite of rendered scheme; clear stored override if matching OS default
+  const handleToggleColorScheme = useCallback(() => {
+    const target: 'light' | 'dark' = isDark ? 'light' : 'dark';
+    const osScheme: 'light' | 'dark' = osPrefersDark ? 'dark' : 'light';
+    const nextStored = target === osScheme ? null : target;
+    setStoredScheme(nextStored);
+    try {
+      if (nextStored === null) {
+        localStorage.removeItem('color-scheme');
+        localStorage.removeItem('theme');
+      } else {
+        localStorage.setItem('color-scheme', nextStored);
+        localStorage.setItem('theme', nextStored);
+      }
+    } catch {
+      // Theme still applies in memory even if storage is blocked
+    }
+  }, [isDark, osPrefersDark]);
+
+  // Close Role Switcher dropdown on Escape key
+  useEffect(() => {
+    if (!isDropdownOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setIsDropdownOpen(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isDropdownOpen]);
 
   const toggleSidebar = () => {
     const next = !isSidebarCollapsed;
@@ -99,7 +168,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children, activeTab, setActi
   const handleTabClick = (tabId: string, requiresAdmin: boolean) => {
     if (requiresAdmin && currentUser?.role !== 'ADMIN') {
       const adminNames = availableUsers.filter(u => u.role === 'ADMIN').map(u => u.name).join('、') || '系統管理員';
-      alert(`⚠️ 權限不足：只有系統管理員（${adminNames}）能夠進入系統設定！`);
+      notify(`權限不足：只有系統管理員（${adminNames}）能夠進入系統設定！`, 'warning');
       return;
     }
     setActiveTab(tabId);
@@ -169,17 +238,24 @@ export const AppShell: React.FC<AppShellProps> = ({ children, activeTab, setActi
 
       {/* Dark/Light Mode */}
       <button
-        onClick={() => setIsDark(!isDark)}
+        type="button"
+        onClick={handleToggleColorScheme}
         className="p-2 bg-slate-100 hover:bg-slate-200/80 dark:bg-slate-800 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 rounded-xl transition-all text-slate-600 dark:text-slate-300"
         title={isDark ? '切換至淺色模式' : '切換至深色模式'}
+        aria-label={isDark ? '切換至淺色模式' : '切換至深色模式'}
+        aria-pressed={isDark}
       >
-        {isDark ? <Sun className="w-4 h-4 text-amber-500" /> : <Moon className="w-4 h-4 text-indigo-500" />}
+        {isDark ? <Sun className="w-4 h-4 text-amber-500" aria-hidden="true" /> : <Moon className="w-4 h-4 text-indigo-500" aria-hidden="true" />}
       </button>
 
       {/* Role Switcher */}
       <div className="relative">
         <button
+          type="button"
           onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+          aria-expanded={isDropdownOpen}
+          aria-haspopup="menu"
+          aria-label={`切換登入身分，目前為 ${currentUser?.name || '使用者'}`}
           className="flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200/80 dark:bg-slate-800 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 rounded-xl transition-all text-xs font-semibold whitespace-nowrap flex-shrink-0"
         >
           <Shield className={`w-3.5 h-3.5 ${theme.accentText}`} />
@@ -240,28 +316,36 @@ export const AppShell: React.FC<AppShellProps> = ({ children, activeTab, setActi
   if (variant === 'B') {
     return (
       <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col font-outfit">
+        <a
+          href="#main-content"
+          className="visually-hidden fixed top-2 left-2 z-50 px-3 py-2 rounded-lg bg-slate-900 text-white text-xs font-bold shadow-lg"
+        >
+          跳至主要內容
+        </a>
         <header className="sticky top-0 z-30 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 shadow-xs">
           <div className="px-4 lg:px-6 h-14 flex items-center justify-between gap-3">
             {/* Brand + Horizontal Nav */}
             <div className="flex items-center gap-4 min-w-0">
               <div className="flex items-center gap-2 flex-shrink-0">
                 <div className={`p-1.5 rounded-lg ${theme.badgeBg}`}>
-                  <Building2 className="w-4 h-4" />
+                  <Building2 className="w-4 h-4" aria-hidden="true" />
                 </div>
                 <span className="font-extrabold text-sm tracking-tight text-slate-800 dark:text-white hidden sm:inline">
                   EZB2B CRM
                 </span>
               </div>
 
-              <nav className="hidden md:flex items-center gap-0.5 overflow-x-auto no-scrollbar">
+              <nav aria-label="主導覽" className="hidden md:flex items-center gap-0.5 overflow-x-auto no-scrollbar">
                 {visibleMenuItems.map(item => {
                   const Icon = item.icon;
                   const isLocked = item.requiresAdmin && currentUser?.role !== 'ADMIN';
                   const isActive = activeTab === item.id;
                   return (
                     <button
+                      type="button"
                       key={item.id}
                       onClick={() => handleTabClick(item.id, item.requiresAdmin)}
+                      aria-current={isActive ? 'page' : undefined}
                       className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap flex-shrink-0 ${
                         isActive
                           ? theme.activeNav
@@ -283,39 +367,44 @@ export const AppShell: React.FC<AppShellProps> = ({ children, activeTab, setActi
             <div className="flex items-center gap-2">
               {renderRightUtilities()}
               <button
+                type="button"
                 onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+                aria-label={isMobileMenuOpen ? '關閉導覽選單' : '開啟導覽選單'}
+                aria-expanded={isMobileMenuOpen}
                 className="md:hidden p-2 rounded-lg text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
               >
-                {isMobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+                {isMobileMenuOpen ? <X className="w-5 h-5" aria-hidden="true" /> : <Menu className="w-5 h-5" aria-hidden="true" />}
               </button>
             </div>
           </div>
 
           {/* Mobile dropdown nav for Variant B */}
           {isMobileMenuOpen && (
-            <div className="md:hidden px-4 pb-3 pt-1 border-t border-slate-100 dark:border-slate-800 flex flex-wrap gap-1.5">
+            <nav aria-label="行動導覽" className="md:hidden px-4 pb-3 pt-1 border-t border-slate-100 dark:border-slate-800 flex flex-wrap gap-1.5">
               {visibleMenuItems.map(item => {
                 const Icon = item.icon;
                 const isActive = activeTab === item.id;
                 return (
                   <button
+                    type="button"
                     key={item.id}
                     onClick={() => handleTabClick(item.id, item.requiresAdmin)}
+                    aria-current={isActive ? 'page' : undefined}
                     className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold ${
                       isActive ? theme.activeNav : 'text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800'
                     }`}
                   >
-                    <Icon className="w-3.5 h-3.5" />
+                    <Icon className="w-3.5 h-3.5" aria-hidden="true" />
                     <span>{item.name}</span>
                   </button>
                 );
               })}
-            </div>
+            </nav>
           )}
         </header>
 
         {/* Full-bleed viewport width main content */}
-        <main className="flex-1 overflow-y-auto p-4 lg:p-6">
+        <main id="main-content" tabIndex={-1} className="flex-1 overflow-y-auto p-4 lg:p-6 outline-none">
           <div className="w-full space-y-5">{children}</div>
         </main>
       </div>
@@ -329,19 +418,28 @@ export const AppShell: React.FC<AppShellProps> = ({ children, activeTab, setActi
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col md:flex-row font-outfit">
+      <a
+        href="#main-content"
+        className="visually-hidden fixed top-2 left-2 z-50 px-3 py-2 rounded-lg bg-slate-900 text-white text-xs font-bold shadow-lg"
+      >
+        跳至主要內容
+      </a>
       {/* Mobile Header */}
       <div className="md:hidden bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-4 py-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <div className={`p-1.5 rounded-lg ${theme.badgeBg}`}>
-            <Building2 className="w-4 h-4" />
+            <Building2 className="w-4 h-4" aria-hidden="true" />
           </div>
           <span className="font-extrabold text-sm text-slate-800 dark:text-white">EZB2B CRM</span>
         </div>
         <button
+          type="button"
           onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+          aria-label={isMobileMenuOpen ? '關閉側邊選單' : '開啟側邊選單'}
+          aria-expanded={isMobileMenuOpen}
           className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
         >
-          {isMobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+          {isMobileMenuOpen ? <X className="w-5 h-5" aria-hidden="true" /> : <Menu className="w-5 h-5" aria-hidden="true" />}
         </button>
       </div>
 
@@ -376,11 +474,13 @@ export const AppShell: React.FC<AppShellProps> = ({ children, activeTab, setActi
 
             {variant === 'A' && !effectiveCollapsed && (
               <button
+                type="button"
                 onClick={toggleSidebar}
                 className="hidden md:flex p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-700 dark:hover:text-slate-200"
                 title="折疊側邊功能表"
+                aria-label="折疊側邊功能表"
               >
-                <PanelLeftClose className="w-4 h-4" />
+                <PanelLeftClose className="w-4 h-4" aria-hidden="true" />
               </button>
             )}
           </div>
@@ -389,17 +489,19 @@ export const AppShell: React.FC<AppShellProps> = ({ children, activeTab, setActi
           {variant === 'A' && effectiveCollapsed && (
             <div className="hidden md:flex justify-center pt-2">
               <button
+                type="button"
                 onClick={toggleSidebar}
                 className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-700 dark:hover:text-slate-200"
                 title="展開側邊功能表"
+                aria-label="展開側邊功能表"
               >
-                <PanelLeftOpen className="w-4 h-4" />
+                <PanelLeftOpen className="w-4 h-4" aria-hidden="true" />
               </button>
             </div>
           )}
 
           {/* Navigation Items */}
-          <nav className="p-2.5 space-y-1">
+          <nav aria-label="主導覽" className="p-2.5 space-y-1">
             {visibleMenuItems.map(item => {
               const Icon = item.icon;
               const isLocked = item.requiresAdmin && currentUser?.role !== 'ADMIN';
@@ -407,9 +509,12 @@ export const AppShell: React.FC<AppShellProps> = ({ children, activeTab, setActi
 
               return (
                 <button
+                  type="button"
                   key={item.id}
                   onClick={() => handleTabClick(item.id, item.requiresAdmin)}
                   title={item.name}
+                  aria-label={effectiveCollapsed ? item.name : undefined}
+                  aria-current={isActive ? 'page' : undefined}
                   className={`
                     w-full flex items-center ${effectiveCollapsed ? 'justify-center px-0' : 'justify-between px-3'} py-2.5 rounded-xl text-xs font-bold transition-all
                     ${isActive
@@ -473,7 +578,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children, activeTab, setActi
 
         {/* Workspace Body */}
         <div className="flex-1 flex min-h-0 overflow-hidden">
-          <main className="flex-1 overflow-y-auto p-4 lg:p-6 bg-slate-50 dark:bg-slate-950">
+          <main id="main-content" tabIndex={-1} className="flex-1 overflow-y-auto p-4 lg:p-6 bg-slate-50 dark:bg-slate-950 outline-none">
             <div className="w-full space-y-5">{children}</div>
           </main>
 

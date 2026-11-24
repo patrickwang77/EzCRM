@@ -1,17 +1,48 @@
-import { useState } from 'react';
+import { Suspense, lazy, useEffect, useState } from 'react';
 import { AuthProvider } from './context/AuthContext';
 import { LayoutProvider } from './context/LayoutContext';
+import { FeedbackProvider } from './context/FeedbackContext';
 import { AppShell } from './components/AppShell';
 import { GlobalQuickCreateModal } from './components/GlobalQuickCreateModal';
-import { Dashboard } from './pages/Dashboard';
-import { Pipeline } from './pages/Pipeline';
-import { Accounts } from './pages/Accounts';
-import { ManagementMetrics } from './pages/ManagementMetrics';
-import { Activities } from './pages/Activities';
-import { Settings } from './pages/Settings';
+
+// Dynamic route-level code-splitting to keep initial bundle lean
+const Dashboard = lazy(() => import('./pages/Dashboard').then(m => ({ default: m.Dashboard })));
+const Pipeline = lazy(() => import('./pages/Pipeline').then(m => ({ default: m.Pipeline })));
+const Accounts = lazy(() => import('./pages/Accounts').then(m => ({ default: m.Accounts })));
+const ManagementMetrics = lazy(() =>
+  import('./pages/ManagementMetrics').then(m => ({ default: m.ManagementMetrics }))
+);
+const Activities = lazy(() => import('./pages/Activities').then(m => ({ default: m.Activities })));
+const Settings = lazy(() => import('./pages/Settings').then(m => ({ default: m.Settings })));
+
+const TAB_TITLES: Record<string, string> = {
+  dashboard: '分析儀表板',
+  pipeline: 'BD Pipeline',
+  accounts: '客戶總覽 360°',
+  metrics: '管理指標檢核',
+  activities: '任務活動歷程',
+  salesSettings: '銷售設定',
+  systemSettings: '系統設定',
+};
+
+const PageLoader = () => (
+  <div
+    className="flex items-center justify-center h-80"
+    role="progressbar"
+    aria-label="載入頁面內容中"
+  >
+    <div className="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-blue-500" />
+  </div>
+);
 
 function AppContent() {
   const [activeTab, setActiveTab] = useState('dashboard');
+
+  // Update SPA document title on view transitions
+  useEffect(() => {
+    const label = TAB_TITLES[activeTab] || '分析儀表板';
+    document.title = `${label} | EZB2B CRM`;
+  }, [activeTab]);
 
   const renderContent = () => {
     switch (activeTab) {
@@ -36,7 +67,7 @@ function AppContent() {
 
   return (
     <AppShell activeTab={activeTab} setActiveTab={setActiveTab}>
-      {renderContent()}
+      <Suspense fallback={<PageLoader />}>{renderContent()}</Suspense>
       <GlobalQuickCreateModal />
     </AppShell>
   );
@@ -46,7 +77,9 @@ function App() {
   return (
     <AuthProvider>
       <LayoutProvider>
-        <AppContent />
+        <FeedbackProvider>
+          <AppContent />
+        </FeedbackProvider>
       </LayoutProvider>
     </AuthProvider>
   );

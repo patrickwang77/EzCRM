@@ -1,7 +1,65 @@
 @import "tailwindcss";
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Outfit:wght@400;500;600;700&display=swap');
 
 @variant dark (&:where(.dark, .dark *));
+
+/* Modern color-scheme synchronization with <meta name="color-scheme"> */
+:root {
+  color-scheme: light dark;
+  --scrollbar-thumb-light: #64748b;
+  --scrollbar-thumb-dark: #94a3b8;
+  --scrollbar-track-light: #f1f5f9;
+  --scrollbar-track-dark: #0f172a;
+  --scrollbar-thumb: var(--scrollbar-thumb-light);
+  --scrollbar-track: var(--scrollbar-track-light);
+
+  @media (prefers-color-scheme: dark) {
+    --scrollbar-thumb: var(--scrollbar-thumb-dark);
+    --scrollbar-track: var(--scrollbar-track-dark);
+  }
+
+  @supports (color: light-dark(white, black)) {
+    --scrollbar-thumb: light-dark(var(--scrollbar-thumb-light), var(--scrollbar-thumb-dark));
+    --scrollbar-track: light-dark(var(--scrollbar-track-light), var(--scrollbar-track-dark));
+  }
+
+  &:has(> head > meta[name="color-scheme"][content="dark"]) {
+    color-scheme: dark;
+  }
+
+  &:has(> head > meta[name="color-scheme"][content="light"]) {
+    color-scheme: light;
+  }
+
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+:root.dark {
+  --scrollbar-thumb: var(--scrollbar-thumb-dark);
+  --scrollbar-track: var(--scrollbar-track-dark);
+}
+
+/* Legacy fallback for browsers without standard scrollbar-color */
+@supports not (scrollbar-color: auto) {
+  :root,
+  * {
+    scrollbar-width: auto;
+  }
+
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: var(--scrollbar-track);
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    border-radius: 9999px;
+  }
+}
 
 body {
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
@@ -14,6 +72,31 @@ body {
   font-family: 'Outfit', sans-serif;
 }
 
+/* Accessible visually-hidden utility (keeps focusable skip links visible when focused) */
+.visually-hidden:where(:not(:focus-within, :active)) {
+  position: absolute !important;
+  clip-path: inset(50%) !important;
+  overflow: hidden !important;
+  width: 1px !important;
+  height: 1px !important;
+  margin: -1px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  white-space: nowrap !important;
+}
+
+/* Native <dialog> modal scroll containment (prevent page scroll behind modal) */
+dialog:modal {
+  overscroll-behavior: contain;
+}
+
+dialog::backdrop {
+  overflow: hidden;
+  overscroll-behavior: contain;
+  background-color: rgb(2 6 23 / 0.6);
+  backdrop-filter: blur(4px);
+}
+
 /* Kanban Drag & Drop Styles */
 .kanban-column {
   transition: background-color 0.2s ease, border-color 0.2s ease;
@@ -23,22 +106,14 @@ body {
   @apply bg-sky-50/50 dark:bg-sky-950/10 border-2 border-dashed border-sky-400 dark:border-sky-600;
 }
 
-/* Scrollbar styling */
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-::-webkit-scrollbar-track {
-  @apply bg-transparent;
-}
-::-webkit-scrollbar-thumb {
-  @apply bg-slate-300 dark:bg-slate-700 rounded-full;
-}
-::-webkit-scrollbar-thumb:hover {
-  @apply bg-slate-400 dark:bg-slate-600;
-}
-
-/* Datepicker calendar icon color fix in dark mode */
-.dark input::-webkit-calendar-picker-indicator {
-  filter: invert(1);
+/* Respect user motion preferences */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

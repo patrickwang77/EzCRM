@@ -1,10 +1,33 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-Hant-TW">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>EZB2B CRM - 智慧銷售管線與分析系統</title>
+    <meta name="color-scheme" content="light dark" />
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem('color-scheme') || localStorage.getItem('theme');
+          var scheme = stored === 'dark' || stored === 'light' ? stored : 'light dark';
+          var meta = document.querySelector('meta[name="color-scheme"]');
+          if (meta) meta.setAttribute('content', scheme);
+          var isDark =
+            scheme === 'dark' ||
+            (scheme === 'light dark' &&
+              window.matchMedia &&
+              window.matchMedia('(prefers-color-scheme: dark)').matches);
+          document.documentElement.classList.toggle('dark', isDark);
+        } catch (e) {}
+      })();
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Outfit:wght@400;500;600;700&display=swap"
+    />
+    <title>分析儀表板 | EZB2B CRM</title>
   </head>
   <body>
     <div id="root"></div>

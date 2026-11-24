@@ -1,9 +1,12 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useId } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useLayout } from '../context/LayoutContext';
+import { useFeedback } from '../context/FeedbackContext';
+import { ModalDialog } from '../components/ModalDialog';
 import { db, getEligibleSalesReps, getVisibleOrgsForUser } from '../services/db';
 import type { Company, Organization, Activity, Opportunity, User, ActivityTypeConfig, Contact } from '../services/db';
 import { exportToCsv } from '../utils/exportCsv';
+import { getLocalTodayIso, getLocalDateTimeOffset } from '../utils/dateUtils';
 import { inferPreviewTags, getTagToneClass } from '../utils/aiTagPreview';
 import { 
   Plus, 
@@ -30,6 +33,9 @@ import {
 export const Activities: React.FC<{ setActiveTab?: (tab: string) => void }> = ({ setActiveTab }) => {
   const { currentUser } = useAuth();
   const { theme, dataVersion } = useLayout();
+  const { notify, confirm } = useFeedback();
+  const actModalTitleId = useId();
+  const detailModalTitleId = useId();
   
   // Slicers State (Org + Conditional Sales Rep + Company)
   const [selectedOrgId, setSelectedOrgId] = useState<string>('');
@@ -170,9 +176,7 @@ export const Activities: React.FC<{ setActiveTab?: (tab: string) => void }> = ({
       setOpportunityId(opportunities[0]?.id || '');
       setType(activityTypes[0]?.name || '待辦任務');
       setDescription('');
-      const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
-      tomorrow.setMinutes(tomorrow.getMinutes() - tomorrow.getTimezoneOffset());
-      setDueDate(tomorrow.toISOString().slice(0, 16));
+      setDueDate(getLocalDateTimeOffset(1, 10, 0).replace(' ', 'T'));
       setIsCompleted(false);
       setAssignedUserId(currentUser?.id || '');
     }
@@ -183,7 +187,7 @@ export const Activities: React.FC<{ setActiveTab?: (tab: string) => void }> = ({
   const handleSaveActivity = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !opportunityId || !description || !dueDate) {
-      alert('請填寫所有必要欄位');
+      notify('請填寫所有必要欄位', 'warning');
       return;
     }
 
@@ -203,7 +207,9 @@ export const Activities: React.FC<{ setActiveTab?: (tab: string) => void }> = ({
       await db.saveActivity(actData);
       setIsModalOpen(false);
       loadData();
+      notify(editingAct ? '活動紀錄已更新' : '已新增活動紀錄', 'success');
     } catch (err) {
+      notify('儲存活動紀錄失敗', 'error');
       console.error('Failed to save activity', err);
     }
   };
@@ -221,12 +227,20 @@ export const Activities: React.FC<{ setActiveTab?: (tab: string) => void }> = ({
 
   // 刪除活動
   const handleDeleteActivity = async (id: string) => {
-    if (!window.confirm('確定要刪除此筆活動紀錄嗎？')) return;
+    const accepted = await confirm({
+      title: '確認刪除此筆活動紀錄？',
+      message: '刪除後將無法復原此筆客戶互動紀錄。',
+      confirmLabel: '確認刪除',
+      tone: 'danger',
+    });
+    if (!accepted) return;
     try {
       await db.deleteActivity(id);
       setIsModalOpen(false);
       loadData();
+      notify('已刪除活動紀錄', 'success');
     } catch (err) {
+      notify('刪除活動紀錄失敗', 'error');
       console.error('Failed to delete activity', err);
     }
   };
@@ -308,7 +322,7 @@ export const Activities: React.FC<{ setActiveTab?: (tab: string) => void }> = ({
         tags.map(t => `#${t.label}`).join(' '),
       ];
     });
-    exportToCsv(`CRM_任務活動歷程_${new Date().toISOString().slice(0, 10)}.csv`, headers, rows);
+    exportToCsv(`CRM_任務活動歷程_${getLocalTodayIso()}.csv`, headers, rows);
   };
 
   return (
@@ -590,20 +604,27 @@ export const Activities: React.FC<{ setActiveTab?: (tab: string) => void }> = ({
         </div>
       </div>
 
-      {/* 新增/編輯活動 Modal */}
-      {isModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl w-full max-w-lg shadow-2xl p-6 relative overflow-hidden animate-in fade-in zoom-in-95 duration-200">
-            <button
-              onClick={() => setIsModalOpen(false)}
-              className="absolute right-5 top-5 p-1.5 bg-slate-100 dark:bg-slate-800 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-xl transition-colors"
-            >
-              <X className="w-5 h-5" />
-            </button>
+      {/* 新增/編輯活動 Modal (原生 <dialog>) */}
+      <ModalDialog
+        open={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        ariaLabelledBy={actModalTitleId}
+        lightDismiss
+        className="max-w-lg"
+      >
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl w-full shadow-2xl p-6 relative overflow-hidden text-slate-800 dark:text-slate-100">
+          <button
+            type="button"
+            onClick={() => setIsModalOpen(false)}
+            aria-label="關閉活動編輯視窗"
+            className="absolute right-5 top-5 p-1.5 bg-slate-100 dark:bg-slate-800 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-xl transition-colors"
+          >
+            <X className="w-5 h-5" aria-hidden="true" />
+          </button>
 
-            <h3 className="text-lg font-extrabold text-slate-800 dark:text-white mb-6">
-              {editingAct ? '修改活動/任務紀錄' : '記錄客戶互動或指派任務'}
-            </h3>
+          <h1 id={actModalTitleId} className="text-lg font-extrabold text-slate-800 dark:text-white mb-6">
+            {editingAct ? '修改活動/任務紀錄' : '記錄客戶互動或指派任務'}
+          </h1>
 
             <form onSubmit={handleSaveActivity} className="space-y-4">
               
@@ -730,37 +751,38 @@ export const Activities: React.FC<{ setActiveTab?: (tab: string) => void }> = ({
 
             </form>
           </div>
-        </div>
-      )}
+      </ModalDialog>
 
-      {/* 活動關聯詳情 Modal */}
-      {isDetailModalOpen && selectedDetailActivity && (() => {
-        const opp = opportunities.find(o => o.id === selectedDetailActivity.opportunityId);
-        const assigned = users.find(u => u.id === selectedDetailActivity.userId);
-        const company = companies.find(c => c.id === opp?.companyId);
+      {/* 活動關聯詳情 Modal (原生 <dialog>) */}
+      <ModalDialog
+        open={isDetailModalOpen && Boolean(selectedDetailActivity)}
+        onClose={() => setIsDetailModalOpen(false)}
+        ariaLabelledBy={detailModalTitleId}
+        lightDismiss
+        className="max-w-[550px]"
+      >
+        {selectedDetailActivity && (() => {
+          const opp = opportunities.find(o => o.id === selectedDetailActivity.opportunityId);
+          const assigned = users.find(u => u.id === selectedDetailActivity.userId);
+          const company = companies.find(c => c.id === opp?.companyId);
 
-        const handleGoToPipeline = () => {
-          if (opp) {
-            sessionStorage.setItem('autofocus_company_id', opp.companyId);
-            setActiveTab?.('pipeline');
-            setIsDetailModalOpen(false);
-          }
-        };
+          const handleGoToPipeline = () => {
+            if (opp) {
+              sessionStorage.setItem('autofocus_company_id', opp.companyId);
+              setActiveTab?.('pipeline');
+              setIsDetailModalOpen(false);
+            }
+          };
 
-        return (
-          <div className="fixed inset-0 flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
-            {/* Backdrop */}
-            <div 
-              className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm"
-              onClick={() => setIsDetailModalOpen(false)}
-            />
-            {/* Panel */}
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 shadow-2xl z-50 w-[550px] max-w-full flex flex-col relative animate-in zoom-in-95 duration-150 text-slate-800 dark:text-slate-100">
-              <button 
+          return (
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 shadow-2xl w-full flex flex-col relative text-slate-800 dark:text-slate-100">
+              <button
+                type="button"
                 onClick={() => setIsDetailModalOpen(false)}
+                aria-label="關閉活動詳情視窗"
                 className="absolute top-4 right-4 p-1.5 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg text-slate-400 hover:text-slate-600 transition-colors"
               >
-                <X className="w-4 h-4" />
+                <X className="w-4 h-4" aria-hidden="true" />
               </button>
 
               {/* Header */}
@@ -779,9 +801,9 @@ export const Activities: React.FC<{ setActiveTab?: (tab: string) => void }> = ({
                     </span>
                   )}
                 </div>
-                <h3 className="text-[15px] font-black text-slate-800 dark:text-slate-100 mt-2.5 leading-snug">
+                <h1 id={detailModalTitleId} className="text-[15px] font-black text-slate-800 dark:text-slate-100 mt-2.5 leading-snug">
                   活動紀錄詳情
-                </h3>
+                </h1>
               </div>
 
               {/* Content Body */}
@@ -855,9 +877,9 @@ export const Activities: React.FC<{ setActiveTab?: (tab: string) => void }> = ({
                 )}
               </div>
             </div>
-          </div>
-        );
-      })()}
+          );
+        })()}
+      </ModalDialog>
 
     </div>
   );

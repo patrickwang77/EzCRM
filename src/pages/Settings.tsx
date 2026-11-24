@@ -1,6 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useId } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useLayout } from '../context/LayoutContext';
+import { useFeedback } from '../context/FeedbackContext';
+import { ModalDialog } from '../components/ModalDialog';
+import { getLocalTodayIso } from '../utils/dateUtils';
 import { db, getDescendantOrgIds, generateId } from '../services/db';
 import type { Stage, StageOutcome, User, Organization, Company, Contact, ActivityTypeConfig, ProductLine, BudgetItemConfig } from '../services/db';
 import { 
@@ -24,6 +27,8 @@ import {
 export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'system' }) => {
   const { currentUser, availableUsers } = useAuth();
   const { dataVersion, bumpDataVersion, theme } = useLayout();
+  const { notify, confirm } = useFeedback();
+  const modalTitleId = useId();
   const [activeTab, setActiveTab] = useState<'stages' | 'org' | 'users' | 'clients' | 'actTypes' | 'prodLines' | 'budgetItems'>(
     mode === 'sales' ? 'clients' : 'stages'
   );
@@ -206,7 +211,7 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
           id: editingId || generateId('comp'),
           name: companyForm.name,
           industry: companyForm.industry,
-          createdAt: editingId ? (companies.find(c => c.id === editingId)?.createdAt || new Date().toISOString().split('T')[0]) : new Date().toISOString().split('T')[0]
+          createdAt: editingId ? (companies.find(c => c.id === editingId)?.createdAt || getLocalTodayIso()) : getLocalTodayIso()
         };
         await db.saveCompany(item);
       } else if (modalType === 'contact') {
@@ -246,8 +251,9 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
       setModalType(null);
       bumpDataVersion();
       loadAllData();
+      notify('設定已儲存', 'success');
     } catch (err: any) {
-      alert(err?.message || '儲存失敗，請確認欄位資料');
+      notify(err?.message || '儲存失敗，請確認欄位資料', 'error');
       console.error('Failed to save settings item', err);
     }
   };
@@ -256,7 +262,13 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
   const handleDelete = async (type: typeof modalType, id: string) => {
     const systemTypes = ['stage', 'org', 'user', 'actType', 'budgetItem'];
     if (systemTypes.includes(type || '') && !isAdmin) return;
-    if (!window.confirm('確定要刪除此項目嗎？刪除後將無法還原，且可能影響關聯資料。')) return;
+    const accepted = await confirm({
+      title: '確認刪除此項目？',
+      message: '刪除後將無法還原，且可能影響關聯資料。',
+      confirmLabel: '確認刪除',
+      tone: 'danger',
+    });
+    if (!accepted) return;
 
     try {
       if (type === 'stage') await db.deleteStage(id);
@@ -270,8 +282,9 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
 
       bumpDataVersion();
       loadAllData();
+      notify('已刪除項目', 'success');
     } catch (err: any) {
-      alert(err?.message || '無法刪除此項目');
+      notify(err?.message || '無法刪除此項目', 'error');
       console.error('Failed to delete item', err);
     }
   };
@@ -487,18 +500,19 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
           
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden shadow-sm">
             <table className="w-full text-left border-collapse">
+              <caption className="visually-hidden">銷售階段設定表</caption>
               <thead>
                 <tr className="bg-slate-50 dark:bg-slate-800/40 border-b border-slate-200 dark:border-slate-800 text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-                  <th className="px-6 py-3">順序</th>
-                  <th className="px-6 py-3">階段名稱</th>
-                  <th className="px-6 py-3">階段類型 (Outcome)</th>
-                  <th className="px-6 py-3">預設贏率</th>
-                  <th className="px-6 py-3">啟用狀態</th>
-                  <th className="px-6 py-3 text-right">操作</th>
+                  <th scope="col" className="px-6 py-3">順序</th>
+                  <th scope="col" className="px-6 py-3">階段名稱</th>
+                  <th scope="col" className="px-6 py-3">階段類型 (Outcome)</th>
+                  <th scope="col" className="px-6 py-3">預設贏率</th>
+                  <th scope="col" className="px-6 py-3">啟用狀態</th>
+                  <th scope="col" className="px-6 py-3 text-right">操作</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-xs font-semibold">
-                {[...stages].sort((a,b) => a.displayOrder - b.displayOrder).map((stage) => {
+                {stages.toSorted((a, b) => a.displayOrder - b.displayOrder).map((stage) => {
                   const isTerminal = stage.outcome === 'WON' || stage.outcome === 'LOST';
                   return (
                     <tr key={stage.id} className="hover:bg-slate-50/40 dark:hover:bg-slate-800/20">
@@ -527,13 +541,13 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
                       </td>
                       <td className="px-6 py-4 text-right">
                         <div className="flex items-center justify-end gap-1.5">
-                          <button onClick={() => handleOpenModal('stage', stage.id)} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded text-slate-400 hover:text-sky-500" title="編輯階段"><Edit3 className="w-3.5 h-3.5" /></button>
+                          <button type="button" onClick={() => handleOpenModal('stage', stage.id)} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded text-slate-400 hover:text-sky-500" title="編輯階段" aria-label={`編輯階段 ${stage.name}`}><Edit3 className="w-3.5 h-3.5" aria-hidden="true" /></button>
                           {isTerminal ? (
                             <span className="p-1 text-slate-300 dark:text-slate-600 cursor-not-allowed" title="必要結案階段不可刪除">
-                              <Lock className="w-3.5 h-3.5" />
+                              <Lock className="w-3.5 h-3.5" aria-hidden="true" />
                             </span>
                           ) : (
-                            <button onClick={() => handleDelete('stage', stage.id)} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded text-slate-400 hover:text-rose-500" title="刪除階段"><Trash2 className="w-3.5 h-3.5" /></button>
+                            <button type="button" onClick={() => handleDelete('stage', stage.id)} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded text-slate-400 hover:text-rose-500" title="刪除階段" aria-label={`刪除階段 ${stage.name}`}><Trash2 className="w-3.5 h-3.5" aria-hidden="true" /></button>
                           )}
                         </div>
                       </td>
@@ -596,8 +610,8 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
                           </span>
                         </div>
                         <div className="flex items-center gap-1.5">
-                          <button onClick={() => handleOpenModal('org', rootOrg.id)} className="p-1 hover:bg-slate-200 dark:hover:bg-slate-850 rounded text-slate-500 hover:text-sky-500"><Edit3 className="w-3.5 h-3.5" /></button>
-                          <button onClick={() => handleDelete('org', rootOrg.id)} className="p-1 hover:bg-slate-200 dark:hover:bg-slate-850 rounded text-slate-500 hover:text-rose-500"><Trash2 className="w-3.5 h-3.5" /></button>
+                          <button type="button" onClick={() => handleOpenModal('org', rootOrg.id)} aria-label={`編輯組織 ${rootOrg.name}`} className="p-1 hover:bg-slate-200 dark:hover:bg-slate-850 rounded text-slate-500 hover:text-sky-500"><Edit3 className="w-3.5 h-3.5" aria-hidden="true" /></button>
+                          <button type="button" onClick={() => handleDelete('org', rootOrg.id)} aria-label={`刪除組織 ${rootOrg.name}`} className="p-1 hover:bg-slate-200 dark:hover:bg-slate-850 rounded text-slate-500 hover:text-rose-500"><Trash2 className="w-3.5 h-3.5" aria-hidden="true" /></button>
                         </div>
                       </div>
 
@@ -692,13 +706,14 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
 
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden shadow-sm">
             <table className="w-full text-left border-collapse">
+              <caption className="visually-hidden">人員帳號與角色清單</caption>
               <thead>
                 <tr className="bg-slate-50 dark:bg-slate-800/40 border-b border-slate-200 dark:border-slate-800 text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-                  <th className="px-6 py-3">姓名</th>
-                  <th className="px-6 py-3">電子郵件</th>
-                  <th className="px-6 py-3">系統角色 (RBAC)</th>
-                  <th className="px-6 py-3">所屬組織</th>
-                  <th className="px-6 py-3 text-right">操作</th>
+                  <th scope="col" className="px-6 py-3">姓名</th>
+                  <th scope="col" className="px-6 py-3">電子郵件</th>
+                  <th scope="col" className="px-6 py-3">系統角色 (RBAC)</th>
+                  <th scope="col" className="px-6 py-3">所屬組織</th>
+                  <th scope="col" className="px-6 py-3 text-right">操作</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-xs font-semibold">
@@ -720,8 +735,8 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
                       <td className="px-6 py-4 text-slate-600 dark:text-slate-350">{userOrg?.name || '無'}</td>
                       <td className="px-6 py-4 text-right">
                         <div className="flex items-center justify-end gap-1.5">
-                          <button onClick={() => handleOpenModal('user', u.id)} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded text-slate-400 hover:text-sky-500"><Edit3 className="w-3.5 h-3.5" /></button>
-                          <button onClick={() => handleDelete('user', u.id)} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded text-slate-400 hover:text-rose-500"><Trash2 className="w-3.5 h-3.5" /></button>
+                          <button type="button" onClick={() => handleOpenModal('user', u.id)} aria-label={`編輯人員 ${u.name}`} title="編輯人員" className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded text-slate-400 hover:text-sky-500"><Edit3 className="w-3.5 h-3.5" aria-hidden="true" /></button>
+                          <button type="button" onClick={() => handleDelete('user', u.id)} aria-label={`刪除人員 ${u.name}`} title="刪除人員" className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded text-slate-400 hover:text-rose-500"><Trash2 className="w-3.5 h-3.5" aria-hidden="true" /></button>
                         </div>
                       </td>
                     </tr>
@@ -757,11 +772,12 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
 
             <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden shadow-sm">
               <table className="w-full text-left border-collapse">
+                <caption className="visually-hidden">客戶公司清單</caption>
                 <thead>
                   <tr className="bg-slate-50 dark:bg-slate-800/40 border-b border-slate-200 dark:border-slate-800 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                    <th className="px-4 py-3">公司名稱</th>
-                    <th className="px-4 py-3">所屬產業</th>
-                    <th className="px-4 py-3 text-right">操作</th>
+                    <th scope="col" className="px-4 py-3">公司名稱</th>
+                    <th scope="col" className="px-4 py-3">所屬產業</th>
+                    <th scope="col" className="px-4 py-3 text-right">操作</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-xs">
@@ -771,8 +787,8 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
                       <td className="px-4 py-3.5 text-slate-500">{c.industry}</td>
                       <td className="px-4 py-3.5 text-right">
                         <div className="flex items-center justify-end gap-1.5">
-                          <button onClick={() => handleOpenModal('company', c.id)} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded text-slate-400 hover:text-sky-500"><Edit3 className="w-3 h-3" /></button>
-                          <button onClick={() => handleDelete('company', c.id)} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded text-slate-400 hover:text-rose-500"><Trash2 className="w-3 h-3" /></button>
+                          <button type="button" onClick={() => handleOpenModal('company', c.id)} aria-label={`編輯公司 ${c.name}`} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded text-slate-400 hover:text-sky-500"><Edit3 className="w-3 h-3" aria-hidden="true" /></button>
+                          <button type="button" onClick={() => handleDelete('company', c.id)} aria-label={`刪除公司 ${c.name}`} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded text-slate-400 hover:text-rose-500"><Trash2 className="w-3 h-3" aria-hidden="true" /></button>
                         </div>
                       </td>
                     </tr>
@@ -802,12 +818,13 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
 
             <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden shadow-sm">
               <table className="w-full text-left border-collapse">
+                <caption className="visually-hidden">客戶聯絡窗口清單</caption>
                 <thead>
                   <tr className="bg-slate-50 dark:bg-slate-800/40 border-b border-slate-200 dark:border-slate-800 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                    <th className="px-4 py-3">聯絡人</th>
-                    <th className="px-4 py-3">電話與信箱</th>
-                    <th className="px-4 py-3">所屬公司</th>
-                    <th className="px-4 py-3 text-right">操作</th>
+                    <th scope="col" className="px-4 py-3">聯絡人</th>
+                    <th scope="col" className="px-4 py-3">電話與信箱</th>
+                    <th scope="col" className="px-4 py-3">所屬公司</th>
+                    <th scope="col" className="px-4 py-3 text-right">操作</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-xs">
@@ -823,8 +840,8 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
                         <td className="px-4 py-3.5 text-slate-500 truncate max-w-[120px]">{comp?.name || '未指派'}</td>
                         <td className="px-4 py-3.5 text-right">
                           <div className="flex items-center justify-end gap-1.5">
-                            <button onClick={() => handleOpenModal('contact', cont.id)} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded text-slate-400 hover:text-sky-500"><Edit3 className="w-3 h-3" /></button>
-                            <button onClick={() => handleDelete('contact', cont.id)} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded text-slate-400 hover:text-rose-500"><Trash2 className="w-3 h-3" /></button>
+                            <button type="button" onClick={() => handleOpenModal('contact', cont.id)} aria-label={`編輯聯絡人 ${cont.name}`} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded text-slate-400 hover:text-sky-500"><Edit3 className="w-3 h-3" aria-hidden="true" /></button>
+                            <button type="button" onClick={() => handleDelete('contact', cont.id)} aria-label={`刪除聯絡人 ${cont.name}`} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded text-slate-400 hover:text-rose-500"><Trash2 className="w-3 h-3" aria-hidden="true" /></button>
                           </div>
                         </td>
                       </tr>
@@ -854,13 +871,14 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
 
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden shadow-sm">
             <table className="w-full text-left border-collapse">
+              <caption className="visually-hidden">活動任務類型設定表</caption>
               <thead>
                 <tr className="bg-slate-50 dark:bg-slate-800/40 border-b border-slate-200 dark:border-slate-800 text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-                  <th className="px-6 py-3">類型名稱</th>
-                  <th className="px-6 py-3">代表圖示</th>
-                  <th className="px-6 py-3">配色樣式</th>
-                  <th className="px-6 py-3">量化單價 (選填)</th>
-                  <th className="px-6 py-3 text-right">操作</th>
+                  <th scope="col" className="px-6 py-3">類型名稱</th>
+                  <th scope="col" className="px-6 py-3">代表圖示</th>
+                  <th scope="col" className="px-6 py-3">配色樣式</th>
+                  <th scope="col" className="px-6 py-3">量化單價 (選填)</th>
+                  <th scope="col" className="px-6 py-3 text-right">操作</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-xs font-semibold">
@@ -882,8 +900,8 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
                     </td>
                     <td className="px-6 py-4 text-right">
                       <div className="flex items-center justify-end gap-1.5">
-                        <button onClick={() => handleOpenModal('actType', type.id)} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded text-slate-400 hover:text-sky-500"><Edit3 className="w-3.5 h-3.5" /></button>
-                        <button onClick={() => handleDelete('actType', type.id)} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded text-slate-400 hover:text-rose-500"><Trash2 className="w-3.5 h-3.5" /></button>
+                        <button type="button" onClick={() => handleOpenModal('actType', type.id)} aria-label={`編輯活動類型 ${type.name}`} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded text-slate-400 hover:text-sky-500"><Edit3 className="w-3.5 h-3.5" aria-hidden="true" /></button>
+                        <button type="button" onClick={() => handleDelete('actType', type.id)} aria-label={`刪除活動類型 ${type.name}`} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded text-slate-400 hover:text-rose-500"><Trash2 className="w-3.5 h-3.5" aria-hidden="true" /></button>
                       </div>
                     </td>
                   </tr>
@@ -910,11 +928,12 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
 
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden shadow-sm">
             <table className="w-full text-left border-collapse">
+              <caption className="visually-hidden">產品線設定表</caption>
               <thead>
                 <tr className="bg-slate-50 dark:bg-slate-800/40 border-b border-slate-200 dark:border-slate-800 text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-                  <th className="px-6 py-3">產品線名稱</th>
-                  <th className="px-6 py-3">敘述說明</th>
-                  <th className="px-6 py-3 text-right">操作</th>
+                  <th scope="col" className="px-6 py-3">產品線名稱</th>
+                  <th scope="col" className="px-6 py-3">敘述說明</th>
+                  <th scope="col" className="px-6 py-3 text-right">操作</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-xs font-semibold">
@@ -924,8 +943,8 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
                     <td className="px-6 py-4 text-slate-500">{p.description || '無'}</td>
                     <td className="px-6 py-4 text-right">
                       <div className="flex items-center justify-end gap-1.5">
-                        <button onClick={() => handleOpenModal('prodLine', p.id)} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded text-slate-400 hover:text-sky-500"><Edit3 className="w-3.5 h-3.5" /></button>
-                        <button onClick={() => handleDelete('prodLine', p.id)} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded text-slate-400 hover:text-rose-500"><Trash2 className="w-3.5 h-3.5" /></button>
+                        <button type="button" onClick={() => handleOpenModal('prodLine', p.id)} aria-label={`編輯產品線 ${p.name}`} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded text-slate-400 hover:text-sky-500"><Edit3 className="w-3.5 h-3.5" aria-hidden="true" /></button>
+                        <button type="button" onClick={() => handleDelete('prodLine', p.id)} aria-label={`刪除產品線 ${p.name}`} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded text-slate-400 hover:text-rose-500"><Trash2 className="w-3.5 h-3.5" aria-hidden="true" /></button>
                       </div>
                     </td>
                   </tr>
@@ -954,10 +973,11 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
 
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden shadow-sm">
             <table className="w-full text-left border-collapse">
+              <caption className="visually-hidden">預算項目設定表</caption>
               <thead>
                 <tr className="bg-slate-50 dark:bg-slate-800/40 border-b border-slate-200 dark:border-slate-800 text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-                  <th className="px-6 py-3">預算項目名稱</th>
-                  <th className="px-6 py-3 text-right">操作</th>
+                  <th scope="col" className="px-6 py-3">預算項目名稱</th>
+                  <th scope="col" className="px-6 py-3 text-right">操作</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-xs font-semibold">
@@ -967,8 +987,8 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
                     <td className="px-6 py-4 text-right">
                       {isAdmin && (
                         <div className="flex items-center justify-end gap-1.5">
-                          <button onClick={() => handleOpenModal('budgetItem', b.id)} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded text-slate-400 hover:text-sky-500"><Edit3 className="w-3.5 h-3.5" /></button>
-                          <button onClick={() => handleDelete('budgetItem', b.id)} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded text-slate-400 hover:text-rose-500"><Trash2 className="w-3.5 h-3.5" /></button>
+                          <button type="button" onClick={() => handleOpenModal('budgetItem', b.id)} aria-label={`編輯預算項目 ${b.name}`} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded text-slate-400 hover:text-sky-500"><Edit3 className="w-3.5 h-3.5" aria-hidden="true" /></button>
+                          <button type="button" onClick={() => handleDelete('budgetItem', b.id)} aria-label={`刪除預算項目 ${b.name}`} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded text-slate-400 hover:text-rose-500"><Trash2 className="w-3.5 h-3.5" aria-hidden="true" /></button>
                         </div>
                       )}
                     </td>
@@ -980,18 +1000,26 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
         </div>
       )}
 
-      {/* --- 全局 CRUD Modal --- */}
-      {modalType && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl w-full max-w-sm shadow-2xl p-6 relative overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+      {/* --- 全局 CRUD Modal (原生 <dialog>) --- */}
+      <ModalDialog
+        open={Boolean(modalType)}
+        onClose={() => setModalType(null)}
+        ariaLabelledBy={modalTitleId}
+        lightDismiss
+        className="max-w-sm"
+      >
+        {modalType && (
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl w-full shadow-2xl p-6 relative overflow-hidden text-slate-800 dark:text-slate-100">
             <button
+              type="button"
               onClick={() => setModalType(null)}
+              aria-label="關閉設定視窗"
               className="absolute right-5 top-5 p-1.5 bg-slate-100 dark:bg-slate-800 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-xl"
             >
-              <X className="w-4.5 h-4.5" />
+              <X className="w-4.5 h-4.5" aria-hidden="true" />
             </button>
 
-            <h3 className="text-md font-extrabold text-slate-800 dark:text-white mb-6">
+            <h1 id={modalTitleId} className="text-md font-extrabold text-slate-800 dark:text-white mb-6">
               {editingId ? '修改' : '新增'} {
                 modalType === 'stage' ? '銷售階段' :
                 modalType === 'org' ? '組織部門' :
@@ -1002,7 +1030,7 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
                 modalType === 'prodLine' ? '產品線' :
                 '預算項目'
               }
-            </h3>
+            </h1>
 
             <form onSubmit={handleSave} className="space-y-4">
               
@@ -1092,15 +1120,16 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
                   <div>
                     <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">人員姓名 *</label>
                     <input
-                      type="text" required placeholder="例如: 謝科長" value={userForm.name}
+                      type="text" required autoComplete="name" placeholder="例如: 謝科長" value={userForm.name}
                       onChange={(e) => setUserForm({ ...userForm, name: e.target.value })}
                       className="w-full px-4 py-2 border border-slate-200 dark:border-slate-800 rounded-xl bg-slate-50 dark:bg-slate-950 text-sm focus:ring-2"
                     />
                   </div>
                   <div>
-                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Email *</label>
+                    <label htmlFor="settings-user-email" className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Email *</label>
                     <input
-                      type="email" required placeholder="example@crm.com" value={userForm.email}
+                      id="settings-user-email"
+                      type="email" inputMode="email" autoComplete="email" spellCheck={false} autoCapitalize="none" required placeholder="example@crm.com" value={userForm.email}
                       onChange={(e) => setUserForm({ ...userForm, email: e.target.value })}
                       className="w-full px-4 py-2 border border-slate-200 dark:border-slate-800 rounded-xl bg-slate-50 dark:bg-slate-950 text-sm focus:ring-2"
                     />
@@ -1161,26 +1190,29 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
               {modalType === 'contact' && (
                 <>
                   <div>
-                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">聯絡人姓名 *</label>
+                    <label htmlFor="settings-contact-name" className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">聯絡人姓名 *</label>
                     <input
-                      type="text" required placeholder="張經理" value={contactForm.name}
+                      id="settings-contact-name"
+                      type="text" required autoComplete="name" placeholder="張經理" value={contactForm.name}
                       onChange={(e) => setContactForm({ ...contactForm, name: e.target.value })}
                       className="w-full px-4 py-2 border border-slate-200 dark:border-slate-800 rounded-xl bg-slate-50 dark:bg-slate-950 text-sm focus:ring-2"
                     />
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">聯絡電話</label>
+                      <label htmlFor="settings-contact-phone" className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">聯絡電話</label>
                       <input
-                        type="text" placeholder="0911-222-333" value={contactForm.phone}
+                        id="settings-contact-phone"
+                        type="tel" inputMode="tel" autoComplete="tel" placeholder="0911-222-333" value={contactForm.phone}
                         onChange={(e) => setContactForm({ ...contactForm, phone: e.target.value })}
                         className="w-full px-4 py-2 border border-slate-200 dark:border-slate-800 rounded-xl bg-slate-50 dark:bg-slate-950 text-sm focus:ring-2"
                       />
                     </div>
                     <div>
-                      <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Email 信箱</label>
+                      <label htmlFor="settings-contact-email" className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Email 信箱</label>
                       <input
-                        type="email" placeholder="cont@company.com" value={contactForm.email}
+                        id="settings-contact-email"
+                        type="email" inputMode="email" autoComplete="email" spellCheck={false} autoCapitalize="none" placeholder="cont@company.com" value={contactForm.email}
                         onChange={(e) => setContactForm({ ...contactForm, email: e.target.value })}
                         className="w-full px-4 py-2 border border-slate-200 dark:border-slate-800 rounded-xl bg-slate-50 dark:bg-slate-950 text-sm focus:ring-2"
                       />
@@ -1313,8 +1345,8 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
 
             </form>
           </div>
-        </div>
-      )}
+        )}
+      </ModalDialog>
 
     </div>
   );

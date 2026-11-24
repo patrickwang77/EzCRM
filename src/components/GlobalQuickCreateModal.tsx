@@ -1,7 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useId } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useLayout } from '../context/LayoutContext';
 import type { QuickCreateTab } from '../context/LayoutContext';
+import { useFeedback } from '../context/FeedbackContext';
+import { ModalDialog } from './ModalDialog';
+import { getLocalTodayIso, getLocalDateOffsetIso, getLocalDateTimeOffset } from '../utils/dateUtils';
 import { db } from '../services/db';
 import type {
   Company,
@@ -17,6 +20,8 @@ import { X, Plus, Briefcase, CheckSquare, Building2, ChevronDown, ChevronRight }
 
 export const GlobalQuickCreateModal: React.FC = () => {
   const { currentUser } = useAuth();
+  const { notify } = useFeedback();
+  const titleId = useId();
   const { isQuickCreateOpen, quickCreateTab, closeQuickCreate, bumpDataVersion, theme } = useLayout();
 
   const [tab, setTab] = useState<QuickCreateTab>(quickCreateTab);
@@ -91,14 +96,12 @@ export const GlobalQuickCreateModal: React.FC = () => {
       setInlineCompName('');
       setInlineCompIndustry('');
       setShowAdvancedOpp(false);
-      setOppSchedules(stgs[0] ? { [stgs[0].id]: new Date().toISOString().split('T')[0] } : {});
+      setOppSchedules(stgs[0] ? { [stgs[0].id]: getLocalTodayIso() } : {});
 
       setActOppId(opps[0]?.id || '');
       setActType(actTypes[0]?.name || '待辦任務');
       setActDesc('');
-      const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
-      tomorrow.setMinutes(tomorrow.getMinutes() - tomorrow.getTimezoneOffset());
-      setActDueDate(tomorrow.toISOString().slice(0, 16));
+      setActDueDate(getLocalDateTimeOffset(1, 10, 0).replace(' ', 'T'));
 
       setCompName('');
       setCompIndustry('');
@@ -118,32 +121,32 @@ export const GlobalQuickCreateModal: React.FC = () => {
     let finalCompanyId = oppCompanyId;
     if (inlineNewComp) {
       if (!inlineCompName.trim()) {
-        alert('請輸入新客戶公司名稱');
+        notify('請輸入新客戶公司名稱', 'warning');
         return;
       }
       const newComp: Company = {
         id: `comp-${Date.now()}`,
         name: inlineCompName.trim(),
         industry: inlineCompIndustry.trim() || '一般企業',
-        createdAt: new Date().toISOString().split('T')[0],
+        createdAt: getLocalTodayIso(),
       };
       await db.saveCompany(newComp);
       finalCompanyId = newComp.id;
     }
 
     if (!finalCompanyId) {
-      alert('請選擇或建立客戶公司');
+      notify('請選擇或建立客戶公司', 'warning');
       return;
     }
 
     const firstStage = stages[0];
     const qty = parseInt(oppQty) || 0;
     const price = parseFloat(oppPrice) || 0;
-    const defaultClose = new Date(Date.now() + 45 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const defaultClose = getLocalDateOffsetIso(45);
 
     // Determine latest scheduled date or default
     let latestDate = defaultClose;
-    const descStages = [...stages].sort((a, b) => b.displayOrder - a.displayOrder);
+    const descStages = stages.toSorted((a, b) => b.displayOrder - a.displayOrder);
     for (const s of descStages) {
       if (oppSchedules[s.id]) {
         latestDate = oppSchedules[s.id];
@@ -170,13 +173,14 @@ export const GlobalQuickCreateModal: React.FC = () => {
 
     await db.saveOpportunity(opp);
     bumpDataVersion();
+    notify('已建立新商機', 'success');
     closeQuickCreate();
   };
 
   const handleCreateActivity = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!actOppId || !actDesc.trim() || !actDueDate) {
-      alert('請選擇關聯商機並填寫內容與時間');
+      notify('請選擇關聯商機並填寫內容與時間', 'warning');
       return;
     }
     const targetOpp = opportunities.find(o => o.id === actOppId);
@@ -191,20 +195,21 @@ export const GlobalQuickCreateModal: React.FC = () => {
     };
     await db.saveActivity(act);
     bumpDataVersion();
+    notify('已登記活動紀錄', 'success');
     closeQuickCreate();
   };
 
   const handleCreateCompany = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!compName.trim()) {
-      alert('請輸入公司名稱');
+      notify('請輸入公司名稱', 'warning');
       return;
     }
     const newComp: Company = {
       id: `comp-${Date.now()}`,
       name: compName.trim(),
       industry: compIndustry.trim() || '一般企業',
-      createdAt: new Date().toISOString().split('T')[0],
+      createdAt: getLocalTodayIso(),
     };
     await db.saveCompany(newComp);
 
@@ -220,30 +225,39 @@ export const GlobalQuickCreateModal: React.FC = () => {
     }
 
     bumpDataVersion();
+    notify('已建立客戶資料', 'success');
     closeQuickCreate();
   };
 
   const monthlyRev = (parseInt(oppQty) || 0) * (parseFloat(oppPrice) || 0);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm">
-      <div className="w-full max-w-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl overflow-hidden">
+    <ModalDialog
+      open={isQuickCreateOpen}
+      onClose={closeQuickCreate}
+      ariaLabelledBy={titleId}
+      lightDismiss
+      className="max-w-xl"
+    >
+      <div className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl overflow-hidden text-slate-800 dark:text-slate-100">
         {/* Header */}
         <div className="px-6 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
           <div>
-            <h3 className="text-base font-extrabold text-slate-800 dark:text-white flex items-center gap-2">
-              <Plus className={`w-4 h-4 ${theme.accentText}`} />
+            <h1 id={titleId} className="text-base font-extrabold text-slate-800 dark:text-white flex items-center gap-2">
+              <Plus className={`w-4 h-4 ${theme.accentText}`} aria-hidden="true" />
               <span>快速建立 (Ctrl/⌘ + K)</span>
-            </h3>
+            </h1>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
               在任何頁面一鍵新增商機、活動紀錄或客戶窗口
             </p>
           </div>
           <button
+            type="button"
             onClick={closeQuickCreate}
+            aria-label="關閉快速建立視窗"
             className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-600 dark:hover:text-slate-200"
           >
-            <X className="w-5 h-5" />
+            <X className="w-5 h-5" aria-hidden="true" />
           </button>
         </div>
 
@@ -516,10 +530,12 @@ export const GlobalQuickCreateModal: React.FC = () => {
           <form onSubmit={handleCreateCompany} className="p-6 space-y-4 text-xs">
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block font-bold text-slate-600 dark:text-slate-300 mb-1.5">客戶公司名稱 *</label>
+                <label htmlFor="qc-comp-name" className="block font-bold text-slate-600 dark:text-slate-300 mb-1.5">客戶公司名稱 *</label>
                 <input
+                  id="qc-comp-name"
                   type="text"
                   required
+                  autoComplete="organization"
                   placeholder="例如：台達電子 (Delta)"
                   value={compName}
                   onChange={e => setCompName(e.target.value)}
@@ -527,8 +543,9 @@ export const GlobalQuickCreateModal: React.FC = () => {
                 />
               </div>
               <div>
-                <label className="block font-bold text-slate-600 dark:text-slate-300 mb-1.5">所屬產業</label>
+                <label htmlFor="qc-comp-industry" className="block font-bold text-slate-600 dark:text-slate-300 mb-1.5">所屬產業</label>
                 <input
+                  id="qc-comp-industry"
                   type="text"
                   placeholder="例如：自動化與電源"
                   value={compIndustry}
@@ -538,11 +555,13 @@ export const GlobalQuickCreateModal: React.FC = () => {
               </div>
             </div>
 
-            <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 space-y-3">
-              <p className="font-bold text-slate-600 dark:text-slate-300">同時建立主要聯絡窗口 (選填)</p>
+            <fieldset className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 space-y-3">
+              <legend className="font-bold text-slate-600 dark:text-slate-300 px-1">同時建立主要聯絡窗口 (選填)</legend>
               <div className="grid grid-cols-3 gap-2.5">
                 <input
                   type="text"
+                  aria-label="窗口姓名"
+                  autoComplete="name"
                   placeholder="窗口姓名"
                   value={contactName}
                   onChange={e => setContactName(e.target.value)}
@@ -550,6 +569,9 @@ export const GlobalQuickCreateModal: React.FC = () => {
                 />
                 <input
                   type="tel"
+                  inputMode="tel"
+                  aria-label="聯絡電話"
+                  autoComplete="tel"
                   placeholder="聯絡電話"
                   value={contactPhone}
                   onChange={e => setContactPhone(e.target.value)}
@@ -557,13 +579,18 @@ export const GlobalQuickCreateModal: React.FC = () => {
                 />
                 <input
                   type="email"
+                  inputMode="email"
+                  aria-label="聯絡 Email"
+                  autoComplete="email"
+                  spellCheck={false}
+                  autoCapitalize="none"
                   placeholder="Email"
                   value={contactEmail}
                   onChange={e => setContactEmail(e.target.value)}
                   className="px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100"
                 />
               </div>
-            </div>
+            </fieldset>
 
             <div className="flex justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
               <button
@@ -580,6 +607,6 @@ export const GlobalQuickCreateModal: React.FC = () => {
           </form>
         )}
       </div>
-    </div>
+    </ModalDialog>
   );
 };

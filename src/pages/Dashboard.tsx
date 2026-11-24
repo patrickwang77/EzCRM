@@ -9,6 +9,7 @@ import {
 } from '../services/db';
 import type { Company, Organization, User, StageOutcome } from '../services/db';
 import { exportToCsv } from '../utils/exportCsv';
+import { getLocalTodayIso } from '../utils/dateUtils';
 import { inferPreviewTags } from '../utils/aiTagPreview';
 import { getStageColor } from '../utils/stageColors';
 import {
@@ -158,7 +159,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
 
         setKpis(kpiRes);
 
-        const sortedStages = [...stages].sort((a, b) => a.displayOrder - b.displayOrder);
+        const sortedStages = stages.toSorted((a, b) => a.displayOrder - b.displayOrder);
         const stageMap = new Map(sortedStages.map(s => [s.id, s]));
 
         const funnelRes: FunnelData[] = sortedStages.map(stage => {
@@ -304,7 +305,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
       d.originalAmount,
       Math.round(d.weightedAmount),
     ]);
-    exportToCsv(`EZB2B_銷售漏斗分析_${new Date().toISOString().slice(0, 10)}.csv`, headers, rows);
+    exportToCsv(`EZB2B_銷售漏斗分析_${getLocalTodayIso()}.csv`, headers, rows);
   };
 
   const renderSVGFunnel = () => {
@@ -487,11 +488,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
               檢視待辦
             </button>
             <button
+              type="button"
               onClick={() => setShowFocusStrip(false)}
               className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
               title="關閉焦點條"
+              aria-label="關閉今日焦點提示條"
             >
-              <X className="w-3.5 h-3.5" />
+              <X className="w-3.5 h-3.5" aria-hidden="true" />
             </button>
           </div>
         </div>
@@ -520,21 +523,23 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
       )}
 
       {/* Compact Utility Slicer Bar: Month Range + Org + Conditional Sales Rep + Company + Export */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl px-4 py-3 flex flex-wrap items-center justify-between gap-3 shadow-xs">
+      <search aria-label="儀表板篩選條件" className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl px-4 py-3 flex flex-wrap items-center justify-between gap-3 shadow-xs">
         <div className="flex flex-wrap items-center gap-2.5">
           {/* Month Range Picker (#2) */}
           <div className="flex items-center gap-1.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-xl px-2.5 py-1 text-xs">
-            <CalendarRange className={`w-3.5 h-3.5 flex-shrink-0 ${theme.accentText}`} />
+            <CalendarRange className={`w-3.5 h-3.5 flex-shrink-0 ${theme.accentText}`} aria-hidden="true" />
             <input
               type="month"
+              aria-label="篩選開始月份"
               value={startMonth}
               onChange={e => setStartMonth(e.target.value)}
               className="bg-transparent text-slate-700 dark:text-slate-200 font-semibold outline-none w-[112px]"
               title="開始月份（含區間新建、區間結案與尚未結案舊案）"
             />
-            <span className="text-slate-400">~</span>
+            <span className="text-slate-400" aria-hidden="true">~</span>
             <input
               type="month"
+              aria-label="篩選結束月份"
               value={endMonth}
               onChange={e => setEndMonth(e.target.value)}
               className="bg-transparent text-slate-700 dark:text-slate-200 font-semibold outline-none w-[112px]"
@@ -570,8 +575,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
           {/* Org Slicer */}
           {currentUser?.role !== 'AM' && (
             <div className="flex items-center gap-1.5">
-              <FolderTree className={`w-4 h-4 ${theme.accentText}`} />
+              <FolderTree className={`w-4 h-4 ${theme.accentText}`} aria-hidden="true" />
               <select
+                aria-label="篩選組織部門"
                 value={selectedOrgId}
                 onChange={e => setSelectedOrgId(e.target.value)}
                 className="px-2.5 py-1.5 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-semibold"
@@ -585,8 +591,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
           {/* Conditional Sales Rep Slicer (#6: 僅在組織下階有人員時生效) */}
           {currentUser?.role !== 'AM' && eligibleReps.length > 0 && (
             <div className="flex items-center gap-1.5">
-              <UserIcon className={`w-4 h-4 ${theme.accentText}`} />
+              <UserIcon className={`w-4 h-4 ${theme.accentText}`} aria-hidden="true" />
               <select
+                aria-label="篩選業務代表"
                 value={selectedUserId}
                 onChange={e => setSelectedUserId(e.target.value)}
                 className="px-2.5 py-1.5 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-semibold"
@@ -603,8 +610,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
 
           {/* Company Slicer */}
           <div className="flex items-center gap-1.5">
-            <Building2 className={`w-4 h-4 ${theme.accentText}`} />
+            <Building2 className={`w-4 h-4 ${theme.accentText}`} aria-hidden="true" />
             <select
+              aria-label="篩選客戶公司"
               value={selectedCompanyId}
               onChange={e => setSelectedCompanyId(e.target.value)}
               className="px-2.5 py-1.5 bg-slate-50 dark:bg-slate-950 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-semibold"
@@ -635,13 +643,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
         </div>
 
         <button
+          type="button"
           onClick={handleExportReport}
           className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-xs font-bold text-slate-700 dark:text-slate-200"
         >
-          <Download className="w-3.5 h-3.5" />
+          <Download className="w-3.5 h-3.5" aria-hidden="true" />
           <span>匯出漏斗報表 (CSV)</span>
         </button>
-      </div>
+      </search>
 
       {/* 5 Executive KPI Cards (大字體置中呈現，保留既有文字與 A/B/C 主題配色) */}
       {(() => {

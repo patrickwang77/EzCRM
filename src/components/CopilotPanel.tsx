@@ -5,6 +5,7 @@ import { db } from '../services/db';
 import type { Opportunity, Company, User, Stage, Activity, Contact, ActivityTypeConfig } from '../services/db';
 import { inferPreviewTags, getTagToneClass } from '../utils/aiTagPreview';
 import { getStageColor } from '../utils/stageColors';
+import { getLocalDateTimeOffset } from '../utils/dateUtils';
 import { Sparkles, X, Building2, User as UserIcon, Plus, Phone, Mail, CheckCircle2, Circle } from 'lucide-react';
 
 export const CopilotPanel: React.FC<{ onGoToPipeline?: (companyId: string) => void }> = ({ onGoToPipeline }) => {
@@ -65,15 +66,13 @@ export const CopilotPanel: React.FC<{ onGoToPipeline?: (companyId: string) => vo
   const handleQuickLog = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedOpp || !quickDesc.trim()) return;
-    const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
-    tomorrow.setMinutes(tomorrow.getMinutes() - tomorrow.getTimezoneOffset());
     await db.saveActivity({
       id: `act-${Date.now()}`,
       opportunityId: selectedOpp.id,
       userId: selectedOpp.userId,
       type: quickType || '待辦任務',
       description: quickDesc.trim(),
-      dueDate: tomorrow.toISOString().slice(0, 16).replace('T', ' '),
+      dueDate: getLocalDateTimeOffset(1, 10, 0),
       isCompleted: false,
     });
     setQuickDesc('');

@@ -1,7 +1,15 @@
-// UTF-8 BOM CSV export helper so Excel opens Traditional Chinese cleanly
-export function exportToCsv(filename: string, headers: string[], rows: (string | number | boolean | null | undefined)[][]) {
+// UTF-8 BOM CSV export helper with Excel formula-injection neutralization
+export function exportToCsv(
+  filename: string,
+  headers: string[],
+  rows: (string | number | boolean | null | undefined)[][]
+) {
   const escapeCell = (val: string | number | boolean | null | undefined) => {
-    const str = val === null || val === undefined ? '' : String(val);
+    let str = val === null || val === undefined ? '' : String(val);
+    // Guard against spreadsheet formula injection (=, +, -, @, tab, CR) on non-numeric strings
+    if (typeof val === 'string' && /^[=+\-@\t\r]/.test(str)) {
+      str = `'${str}`;
+    }
     if (/[",\n\r]/.test(str)) {
       return `"${str.replace(/"/g, '""')}"`;
     }
@@ -10,7 +18,7 @@ export function exportToCsv(filename: string, headers: string[], rows: (string |
 
   const csvLines = [
     headers.map(escapeCell).join(','),
-    ...rows.map(row => row.map(escapeCell).join(','))
+    ...rows.map(row => row.map(escapeCell).join(',')),
   ].join('\r\n');
 
   const blob = new Blob(['\uFEFF' + csvLines], { type: 'text/csv;charset=utf-8;' });

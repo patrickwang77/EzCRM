@@ -4,6 +4,7 @@ import { useLayout } from '../context/LayoutContext';
 import { db, getEligibleSalesReps, getVisibleOrgsForUser } from '../services/db';
 import type { Company, Contact, Opportunity, Activity, Stage, Organization, User } from '../services/db';
 import { exportToCsv } from '../utils/exportCsv';
+import { getLocalTodayIso } from '../utils/dateUtils';
 import { inferPreviewTags, getTagToneClass } from '../utils/aiTagPreview';
 import {
   Building2,
@@ -176,7 +177,7 @@ export const Accounts: React.FC<AccountsProps> = ({ setActiveTab }) => {
         m.tags.map(t => `#${t.label}`).join(' '),
       ];
     });
-    exportToCsv(`CRM_客戶總覽_${new Date().toISOString().slice(0, 10)}.csv`, headers, rows);
+    exportToCsv(`CRM_客戶總覽_${getLocalTodayIso()}.csv`, headers, rows);
   };
 
   const handleGoToPipeline = (companyId: string) => {
