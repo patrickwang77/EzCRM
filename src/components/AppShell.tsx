@@ -146,7 +146,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children, activeTab, setActi
     { id: 'dashboard', name: '分析儀表板', icon: LayoutDashboard, requiresAdmin: false },
     { id: 'pipeline', name: 'BD Pipeline', icon: KanbanSquare, requiresAdmin: false },
     { id: 'accounts', name: '客戶總覽 360°', icon: BriefcaseBusiness, requiresAdmin: false },
-    { id: 'metrics', name: '管理指標檢核', icon: BarChart3, requiresAdmin: false, isNew: true },
+    { id: 'metrics', name: '管理指標檢核', icon: BarChart3, requiresAdmin: false },
     { id: 'activities', name: '任務活動歷程', icon: CheckSquare, requiresAdmin: false },
     { id: 'salesSettings', name: '銷售設定', icon: Sliders, requiresAdmin: false },
     { id: 'systemSettings', name: '系統設定', icon: Settings, requiresAdmin: true },
@@ -403,9 +403,6 @@ export const AppShell: React.FC<AppShellProps> = ({ children, activeTab, setActi
                     >
                       <Icon className={`w-3.5 h-3.5 ${isActive ? theme.activeNavIcon : ''}`} />
                       <span>{item.name}</span>
-                      {item.isNew && (
-                        <span className={`text-[9px] px-1 py-0.2 rounded font-extrabold ${theme.badgeBg}`}>新</span>
-                      )}
                       {isLocked && <Lock className="w-3 h-3 text-slate-400" />}
                     </button>
                   );
@@ -576,9 +573,6 @@ export const AppShell: React.FC<AppShellProps> = ({ children, activeTab, setActi
                     <Icon className={`w-4 h-4 flex-shrink-0 ${isActive ? theme.activeNavIcon : ''}`} />
                     {!effectiveCollapsed && <span className="truncate">{item.name}</span>}
                   </div>
-                  {!effectiveCollapsed && item.isNew && (
-                    <span className={`text-[9px] px-1.5 py-0.5 rounded font-extrabold ${theme.badgeBg}`}>新</span>
-                  )}
                   {!effectiveCollapsed && isLocked && <Lock className="w-3.5 h-3.5 text-slate-400" />}
                 </button>
               );
