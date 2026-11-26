@@ -43,11 +43,11 @@ function AppContent() {
   // Update SPA document title on view transitions
   useEffect(() => {
     if (authMode === 'firebase' && authStatus !== 'authenticated') {
-      document.title = '登入 | EzCRM';
+      document.title = 'EzCRM - 登入';
       return;
     }
     const label = TAB_TITLES[activeTab] || '分析儀表板';
-    document.title = `${label} | EzCRM`;
+    document.title = `EzCRM - ${label}`;
   }, [activeTab, authMode, authStatus]);
 
   if (authMode === 'firebase' && (loading || authStatus === 'loading')) {
