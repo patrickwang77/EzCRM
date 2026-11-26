@@ -11,6 +11,14 @@ node_modules
 dist
 dist-clean-b
 dist-ssr
+.env
+.env.local
+.env.*.local
+.firebaserc
+.firebase/
+serviceAccountKey.json
+firebase-debug.log*
+firestore-debug.log*
 *.local
 
 # Editor directories and files

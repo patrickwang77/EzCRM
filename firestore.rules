@@ -1,0 +1,551 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: allowlist
+    // Document ID: {emailLower} (normalized lowercase email)
+    // Fields:
+    //   - userId: string (required, 1..128 chars) - linked users/{userId} ID
+    //   - email: string (required, valid email == emailLower)
+    //   - name: string (required, 1..120 chars)
+    //   - role: string (required, 'ADMIN' | 'BU_HEAD' | 'AM')
+    //   - orgId: string | null (required key, 1..128 chars if string)
+    //
+    // Collection: users
+    // Document ID: {userId}
+    // Fields:
+    //   - id: string (required, == userId, 1..128 chars)
+    //   - name: string (required, 1..120 chars)
+    //   - email: string (required, valid email, 3..254 chars)
+    //   - role: string (required, 'ADMIN' | 'BU_HEAD' | 'AM')
+    //   - orgId: string | null (required key, 1..128 chars if string)
+    //   - authUid: string (optional, 1..128 chars) - Firebase Auth UID synced on login
+    //   - photoURL: string | null (optional, valid http(s) URL <= 2048 chars if string)
+    //   - lastLoginAt: string (optional, 1..64 chars) - ISO timestamp string synced on login
+    //
+    // Collection: organizations
+    // Document ID: {orgId}
+    // Fields:
+    //   - id: string (required, == orgId, 1..128 chars)
+    //   - name: string (required, 1..120 chars)
+    //   - parentId: string | null (required key, 1..128 chars if string, != orgId)
+    //
+    // Collection: stages
+    // Document ID: {stageId}
+    // Fields:
+    //   - id: string (required, == stageId, 1..128 chars)
+    //   - name: string (required, 1..120 chars)
+    //   - displayOrder: number (required, 0..1000)
+    //   - isActive: bool (required)
+    //   - defaultWinProbability: number (required, 0..100)
+    //   - outcome: string (required, 'OPEN' | 'WON' | 'LOST')
+    //
+    // Collection: activityTypes
+    // Document ID: {typeId}
+    // Fields:
+    //   - id: string (required, == typeId, 1..128 chars)
+    //   - name: string (required, 1..120 chars)
+    //   - icon: string (required, 1..64 chars)
+    //   - color: string (required, 1..64 chars)
+    //   - unitCost: number (optional, >= 0 && <= 100000000)
+    //
+    // Collection: budgetItems
+    // Document ID: {itemId}
+    // Fields:
+    //   - id: string (required, == itemId, 1..128 chars)
+    //   - name: string (required, 1..120 chars)
+    //
+    // Collection: companies
+    // Document ID: {compId}
+    // Fields:
+    //   - id: string (required, == compId, 1..128 chars)
+    //   - name: string (required, 1..200 chars)
+    //   - industry: string (required, 0..120 chars)
+    //   - createdAt: string (required, 1..64 chars, immutable once set)
+    //
+    // Collection: contacts
+    // Document ID: {contactId}
+    // Fields:
+    //   - id: string (required, == contactId, 1..128 chars)
+    //   - companyId: string (required, 1..128 chars)
+    //   - name: string (required, 1..120 chars)
+    //   - email: string (required, empty string or valid email <= 254 chars)
+    //   - phone: string (required, 0..50 chars)
+    //
+    // Collection: productLines
+    // Document ID: {lineId}
+    // Fields:
+    //   - id: string (required, == lineId, 1..128 chars)
+    //   - name: string (required, 1..120 chars)
+    //   - description: string (required, 0..1000 chars)
+    //
+    // Collection: salesTargets
+    // Document ID: {month} (YYYY-MM)
+    // Fields:
+    //   - month: string (required, == month, matches YYYY-MM)
+    //   - targetAmount: number (required, >= 0 && <= 1000000000000)
+    //
+    // Collection: opportunities
+    // Document ID: {oppId}
+    // Fields:
+    //   - id: string (required, == oppId, 1..128 chars)
+    //   - companyId: string (required, 1..128 chars)
+    //   - userId: string (required, 1..128 chars) - owner user ID
+    //   - stageId: string (required, 1..128 chars)
+    //   - title: string (required, 1..200 chars)
+    //   - amount: number (required, >= 0 && <= 1000000000000)
+    //   - winProbability: number (required, 0..100)
+    //   - expectedCloseDate: string (required, 0..64 chars)
+    //   - productLineId: string (required, 0..128 chars)
+    //   - monthlyQuantity: number (required, >= 0 && <= 100000000)
+    //   - unitPrice: number (required, >= 0 && <= 1000000000000)
+    //   - orgId: string | null (required key, 1..128 chars if string)
+    //   - schedules: map (required, <= 50 entries)
+    //   - budgets: list (required, <= 50 items)
+    //   - createdAt: string (optional, 0..64 chars, immutable once set)
+    //   - closedAt: string (optional, 0..64 chars)
+    //   - tags: list (optional, <= 30 items)
+    //
+    // Collection: activities
+    // Document ID: {actId}
+    // Fields:
+    //   - id: string (required, == actId, 1..128 chars)
+    //   - opportunityId: string (required, 1..128 chars)
+    //   - userId: string (required, 1..128 chars) - owner user ID
+    //   - type: string (required, 1..120 chars)
+    //   - description: string (required, 1..4000 chars)
+    //   - dueDate: string (required, 1..64 chars)
+    //   - isCompleted: bool (required)
+    //   - tags: list (optional, <= 30 items)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Core Auth & Allowlist Helpers (O(1) Lookup)
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null
+        && 'email' in request.auth.token
+        && request.auth.token.email != null
+        && request.auth.token.email is string
+        && 'email_verified' in request.auth.token
+        && request.auth.token.email_verified == true;
+    }
+
+    function callerEmailLower() {
+      return request.auth.token.email.lower();
+    }
+
+    function allowlistPath(emailLower) {
+      return /databases/$(database)/documents/allowlist/$(emailLower);
+    }
+
+    function allowlistData() {
+      return get(allowlistPath(callerEmailLower())).data;
+    }
+
+    function isAllowlisted() {
+      return isAuthenticated()
+        && exists(allowlistPath(callerEmailLower()))
+        && allowlistData().keys().hasAll(['userId', 'role'])
+        && allowlistData().userId is string
+        && allowlistData().userId.size() > 0
+        && allowlistData().role in ['ADMIN', 'BU_HEAD', 'AM'];
+    }
+
+    function getRole() {
+      return isAllowlisted() ? allowlistData().role : '';
+    }
+
+    function getAppUserId() {
+      return isAllowlisted() ? allowlistData().userId : '';
+    }
+
+    function isAdmin() {
+      return getRole() == 'ADMIN';
+    }
+
+    function isAdminOrBuHead() {
+      return getRole() in ['ADMIN', 'BU_HEAD'];
+    }
+
+    // ===============================================================
+    // Generic Validation Helpers
+    // ===============================================================
+
+    function hasRequiredFields(data, fields) {
+      return data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(data, fields) {
+      return data.keys().hasOnly(fields);
+    }
+
+    function isValidString(val, minLen, maxLen) {
+      return val is string && val.size() >= minLen && val.size() <= maxLen;
+    }
+
+    function isValidOptionalString(data, field, minLen, maxLen) {
+      return !(field in data) || isValidString(data[field], minLen, maxLen);
+    }
+
+    function isValidNullableString(val, minLen, maxLen) {
+      return val == null || isValidString(val, minLen, maxLen);
+    }
+
+    function isValidEmail(email) {
+      return email is string
+        && email.size() >= 3
+        && email.size() <= 254
+        && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidUrl(url) {
+      return url is string
+        && url.size() <= 2048
+        && (url.matches("^https://.*") || url.matches("^http://.*"));
+    }
+
+    function isValidRole(role) {
+      return role in ['ADMIN', 'BU_HEAD', 'AM'];
+    }
+
+    // ===============================================================
+    // Domain Validators (Used in BOTH create and update)
+    // ===============================================================
+
+    function isValidAllowlist(data, emailLower) {
+      return hasRequiredFields(data, ['userId', 'email', 'name', 'role', 'orgId'])
+        && hasOnlyAllowedFields(data, ['userId', 'email', 'name', 'role', 'orgId'])
+        && isValidString(data.userId, 1, 128)
+        && isValidEmail(data.email)
+        && data.email == emailLower
+        && data.email == data.email.lower()
+        && isValidString(data.name, 1, 120)
+        && isValidRole(data.role)
+        && isValidNullableString(data.orgId, 1, 128);
+    }
+
+    function isValidUser(data, userId) {
+      return hasRequiredFields(data, ['id', 'name', 'email', 'role', 'orgId'])
+        && hasOnlyAllowedFields(data, [
+          'id', 'name', 'email', 'role', 'orgId',
+          'authUid', 'photoURL', 'lastLoginAt'
+        ])
+        && isValidString(data.id, 1, 128)
+        && data.id == userId
+        && isValidString(data.name, 1, 120)
+        && isValidEmail(data.email)
+        && isValidRole(data.role)
+        && isValidNullableString(data.orgId, 1, 128)
+        && isValidOptionalString(data, 'authUid', 1, 128)
+        && (!('photoURL' in data) || data.photoURL == null || isValidUrl(data.photoURL))
+        && isValidOptionalString(data, 'lastLoginAt', 1, 64);
+    }
+
+    function isValidOrganization(data, orgId) {
+      return hasRequiredFields(data, ['id', 'name', 'parentId'])
+        && hasOnlyAllowedFields(data, ['id', 'name', 'parentId'])
+        && isValidString(data.id, 1, 128)
+        && data.id == orgId
+        && isValidString(data.name, 1, 120)
+        && isValidNullableString(data.parentId, 1, 128)
+        && data.parentId != orgId;
+    }
+
+    function isValidStage(data, stageId) {
+      return hasRequiredFields(data, [
+          'id', 'name', 'displayOrder', 'isActive', 'defaultWinProbability', 'outcome'
+        ])
+        && hasOnlyAllowedFields(data, [
+          'id', 'name', 'displayOrder', 'isActive', 'defaultWinProbability', 'outcome'
+        ])
+        && isValidString(data.id, 1, 128)
+        && data.id == stageId
+        && isValidString(data.name, 1, 120)
+        && data.displayOrder is number
+        && data.displayOrder >= 0
+        && data.displayOrder <= 1000
+        && data.isActive is bool
+        && data.defaultWinProbability is number
+        && data.defaultWinProbability >= 0
+        && data.defaultWinProbability <= 100
+        && data.outcome in ['OPEN', 'WON', 'LOST'];
+    }
+
+    function isValidActivityType(data, typeId) {
+      return hasRequiredFields(data, ['id', 'name', 'icon', 'color'])
+        && hasOnlyAllowedFields(data, ['id', 'name', 'icon', 'color', 'unitCost'])
+        && isValidString(data.id, 1, 128)
+        && data.id == typeId
+        && isValidString(data.name, 1, 120)
+        && isValidString(data.icon, 1, 64)
+        && isValidString(data.color, 1, 64)
+        && (!('unitCost' in data) || (
+          data.unitCost is number && data.unitCost >= 0 && data.unitCost <= 100000000
+        ));
+    }
+
+    function isValidBudgetItem(data, itemId) {
+      return hasRequiredFields(data, ['id', 'name'])
+        && hasOnlyAllowedFields(data, ['id', 'name'])
+        && isValidString(data.id, 1, 128)
+        && data.id == itemId
+        && isValidString(data.name, 1, 120);
+    }
+
+    function isValidCompany(data, compId) {
+      return hasRequiredFields(data, ['id', 'name', 'industry', 'createdAt'])
+        && hasOnlyAllowedFields(data, ['id', 'name', 'industry', 'createdAt'])
+        && isValidString(data.id, 1, 128)
+        && data.id == compId
+        && isValidString(data.name, 1, 200)
+        && isValidString(data.industry, 0, 120)
+        && isValidString(data.createdAt, 1, 64);
+    }
+
+    function isValidContact(data, contactId) {
+      return hasRequiredFields(data, ['id', 'companyId', 'name', 'email', 'phone'])
+        && hasOnlyAllowedFields(data, ['id', 'companyId', 'name', 'email', 'phone'])
+        && isValidString(data.id, 1, 128)
+        && data.id == contactId
+        && isValidString(data.companyId, 1, 128)
+        && isValidString(data.name, 1, 120)
+        && data.email is string
+        && (data.email == '' || isValidEmail(data.email))
+        && isValidString(data.phone, 0, 50);
+    }
+
+    function isValidProductLine(data, lineId) {
+      return hasRequiredFields(data, ['id', 'name', 'description'])
+        && hasOnlyAllowedFields(data, ['id', 'name', 'description'])
+        && isValidString(data.id, 1, 128)
+        && data.id == lineId
+        && isValidString(data.name, 1, 120)
+        && isValidString(data.description, 0, 1000);
+    }
+
+    function isValidSalesTarget(data, month) {
+      return hasRequiredFields(data, ['month', 'targetAmount'])
+        && hasOnlyAllowedFields(data, ['month', 'targetAmount'])
+        && data.month is string
+        && data.month == month
+        && data.month.matches("^\\d{4}-\\d{2}$")
+        && data.targetAmount is number
+        && data.targetAmount >= 0
+        && data.targetAmount <= 1000000000000;
+    }
+
+    function isValidEntityTagsOptional(data) {
+      return !('tags' in data)
+        || (data.tags is list
+            && data.tags.size() <= 30
+            && (data.tags.size() == 0
+                || (data.tags[0] is map
+                    && data.tags[0].keys().hasAll(['label', 'source'])
+                    && data.tags[0].keys().hasOnly(['label', 'source', 'tone'])
+                    && isValidString(data.tags[0].label, 1, 60)
+                    && data.tags[0].source in ['manual', 'ai'])));
+    }
+
+    function isValidOpportunity(data, oppId) {
+      return hasRequiredFields(data, [
+          'id', 'companyId', 'userId', 'stageId', 'title',
+          'amount', 'winProbability', 'expectedCloseDate',
+          'productLineId', 'monthlyQuantity', 'unitPrice', 'orgId',
+          'schedules', 'budgets'
+        ])
+        && hasOnlyAllowedFields(data, [
+          'id', 'companyId', 'userId', 'stageId', 'title',
+          'amount', 'winProbability', 'expectedCloseDate',
+          'createdAt', 'closedAt',
+          'productLineId', 'monthlyQuantity', 'unitPrice', 'orgId',
+          'schedules', 'budgets', 'tags'
+        ])
+        && isValidString(data.id, 1, 128)
+        && data.id == oppId
+        && isValidString(data.companyId, 1, 128)
+        && isValidString(data.userId, 1, 128)
+        && isValidString(data.stageId, 1, 128)
+        && isValidString(data.title, 1, 200)
+        && data.amount is number && data.amount >= 0 && data.amount <= 1000000000000
+        && data.winProbability is number && data.winProbability >= 0 && data.winProbability <= 100
+        && isValidString(data.expectedCloseDate, 0, 64)
+        && isValidString(data.productLineId, 0, 128)
+        && data.monthlyQuantity is number && data.monthlyQuantity >= 0 && data.monthlyQuantity <= 100000000
+        && data.unitPrice is number && data.unitPrice >= 0 && data.unitPrice <= 1000000000000
+        && isValidNullableString(data.orgId, 1, 128)
+        && data.schedules is map && data.schedules.size() <= 50
+        && data.budgets is list
+        && data.budgets.size() <= 50
+        && (data.budgets.size() == 0
+            || (data.budgets[0] is map
+                && data.budgets[0].keys().hasAll(['budgetItemId', 'amount'])
+                && data.budgets[0].keys().hasOnly(['budgetItemId', 'amount'])
+                && isValidString(data.budgets[0].budgetItemId, 1, 128)
+                && data.budgets[0].amount is number
+                && data.budgets[0].amount >= 0
+                && data.budgets[0].amount <= 1000000000000))
+        && isValidOptionalString(data, 'createdAt', 0, 64)
+        && isValidOptionalString(data, 'closedAt', 0, 64)
+        && isValidEntityTagsOptional(data);
+    }
+
+    function isValidActivity(data, actId) {
+      return hasRequiredFields(data, [
+          'id', 'opportunityId', 'userId', 'type', 'description', 'dueDate', 'isCompleted'
+        ])
+        && hasOnlyAllowedFields(data, [
+          'id', 'opportunityId', 'userId', 'type', 'description', 'dueDate', 'isCompleted', 'tags'
+        ])
+        && isValidString(data.id, 1, 128)
+        && data.id == actId
+        && isValidString(data.opportunityId, 1, 128)
+        && isValidString(data.userId, 1, 128)
+        && isValidString(data.type, 1, 120)
+        && isValidString(data.description, 1, 4000)
+        && isValidString(data.dueDate, 1, 64)
+        && data.isCompleted is bool
+        && isValidEntityTagsOptional(data);
+    }
+
+    // ===============================================================
+    // Collection Rules
+    // ===============================================================
+
+    // Allowlist: user can check their own email entry; ADMIN manages all
+    match /allowlist/{emailLower} {
+      allow get: if isAuthenticated() && (callerEmailLower() == emailLower || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isAdmin() && isValidAllowlist(request.resource.data, emailLower);
+      allow update: if isAdmin() && isValidAllowlist(request.resource.data, emailLower);
+      allow delete: if isAdmin();
+    }
+
+    // Users: allowlisted users can read directory; ADMIN manages users;
+    // users can only self-update login metadata fields
+    match /users/{userId} {
+      allow read: if isAllowlisted();
+      allow create: if isAdmin() && isValidUser(request.resource.data, userId);
+      allow update: if isAllowlisted()
+        && isValidUser(request.resource.data, userId)
+        && (
+          isAdmin()
+          || (
+            userId == getAppUserId()
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'authUid', 'photoURL', 'lastLoginAt'
+            ])
+          )
+        );
+      allow delete: if isAdmin();
+    }
+
+    // System Configuration Collections: allowlisted read, ADMIN write
+    match /organizations/{orgId} {
+      allow read: if isAllowlisted();
+      allow create: if isAdmin() && isValidOrganization(request.resource.data, orgId);
+      allow update: if isAdmin() && isValidOrganization(request.resource.data, orgId);
+      allow delete: if isAdmin();
+    }
+
+    match /stages/{stageId} {
+      allow read: if isAllowlisted();
+      allow create: if isAdmin() && isValidStage(request.resource.data, stageId);
+      allow update: if isAdmin() && isValidStage(request.resource.data, stageId);
+      allow delete: if isAdmin();
+    }
+
+    match /activityTypes/{typeId} {
+      allow read: if isAllowlisted();
+      allow create: if isAdmin() && isValidActivityType(request.resource.data, typeId);
+      allow update: if isAdmin() && isValidActivityType(request.resource.data, typeId);
+      allow delete: if isAdmin();
+    }
+
+    match /budgetItems/{itemId} {
+      allow read: if isAllowlisted();
+      allow create: if isAdmin() && isValidBudgetItem(request.resource.data, itemId);
+      allow update: if isAdmin() && isValidBudgetItem(request.resource.data, itemId);
+      allow delete: if isAdmin();
+    }
+
+    // Sales Settings & Shared Master Data: allowlisted read & write
+    match /companies/{compId} {
+      allow read: if isAllowlisted();
+      allow create: if isAllowlisted() && isValidCompany(request.resource.data, compId);
+      allow update: if isAllowlisted()
+        && isValidCompany(request.resource.data, compId)
+        && (!('createdAt' in resource.data) || request.resource.data.createdAt == resource.data.createdAt);
+      allow delete: if isAllowlisted();
+    }
+
+    match /contacts/{contactId} {
+      allow read: if isAllowlisted();
+      allow create: if isAllowlisted() && isValidContact(request.resource.data, contactId);
+      allow update: if isAllowlisted() && isValidContact(request.resource.data, contactId);
+      allow delete: if isAllowlisted();
+    }
+
+    match /productLines/{lineId} {
+      allow read: if isAllowlisted();
+      allow create: if isAllowlisted() && isValidProductLine(request.resource.data, lineId);
+      allow update: if isAllowlisted() && isValidProductLine(request.resource.data, lineId);
+      allow delete: if isAllowlisted();
+    }
+
+    // Sales Targets: allowlisted read, ADMIN or BU_HEAD write
+    match /salesTargets/{month} {
+      allow read: if isAllowlisted();
+      allow create: if isAdminOrBuHead() && isValidSalesTarget(request.resource.data, month);
+      allow update: if isAdminOrBuHead() && isValidSalesTarget(request.resource.data, month);
+      allow delete: if isAdminOrBuHead();
+    }
+
+    // Opportunities: ADMIN/BU_HEAD full access; AM scoped strictly to own userId
+    match /opportunities/{oppId} {
+      allow read: if isAdminOrBuHead()
+        || (isAllowlisted() && resource.data.userId == getAppUserId());
+      allow create: if isAllowlisted()
+        && isValidOpportunity(request.resource.data, oppId)
+        && (isAdminOrBuHead() || request.resource.data.userId == getAppUserId());
+      allow update: if isAllowlisted()
+        && isValidOpportunity(request.resource.data, oppId)
+        && (!('createdAt' in resource.data) || ('createdAt' in request.resource.data && request.resource.data.createdAt == resource.data.createdAt))
+        && (
+          isAdminOrBuHead()
+          || (resource.data.userId == getAppUserId() && request.resource.data.userId == getAppUserId())
+        );
+      allow delete: if isAdminOrBuHead()
+        || (isAllowlisted() && resource.data.userId == getAppUserId());
+    }
+
+    // Activities: ADMIN/BU_HEAD full access; AM scoped strictly to own userId
+    match /activities/{actId} {
+      allow read: if isAdminOrBuHead()
+        || (isAllowlisted() && resource.data.userId == getAppUserId());
+      allow create: if isAllowlisted()
+        && isValidActivity(request.resource.data, actId)
+        && (isAdminOrBuHead() || request.resource.data.userId == getAppUserId());
+      allow update: if isAllowlisted()
+        && isValidActivity(request.resource.data, actId)
+        && (
+          isAdminOrBuHead()
+          || (resource.data.userId == getAppUserId() && request.resource.data.userId == getAppUserId())
+        );
+      allow delete: if isAdminOrBuHead()
+        || (isAllowlisted() && resource.data.userId == getAppUserId());
+    }
+
+    // Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

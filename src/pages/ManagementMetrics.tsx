@@ -700,15 +700,17 @@ export const ManagementMetrics: React.FC = () => {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setShowUnitCostEditor(!showUnitCostEditor)}
-              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-bold text-slate-600 dark:text-slate-300"
-            >
-              <Coins className={`w-3.5 h-3.5 ${theme.accentText}`} />
-              <span>設定活動量化單價</span>
-              {showUnitCostEditor ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
-            </button>
+            {currentUser?.role === 'ADMIN' && (
+              <button
+                type="button"
+                onClick={() => setShowUnitCostEditor(!showUnitCostEditor)}
+                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-bold text-slate-600 dark:text-slate-300"
+              >
+                <Coins className={`w-3.5 h-3.5 ${theme.accentText}`} />
+                <span>設定活動量化單價</span>
+                {showUnitCostEditor ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+              </button>
+            )}
 
             <div className="inline-flex p-0.5 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs">
               {(
@@ -898,15 +900,21 @@ export const ManagementMetrics: React.FC = () => {
                   {periodMode === 'month' && (
                     <>
                       <td className="py-2.5 px-3 text-right">
-                        <input
-                          type="number"
-                          min="0"
-                          step="100000"
-                          placeholder="設定目標..."
-                          defaultValue={row.targetAmt || ''}
-                          onBlur={e => handleUpdateTarget(row.periodKey, e.target.value)}
-                          className="w-28 text-right px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 font-mono text-slate-800 dark:text-slate-100"
-                        />
+                        {currentUser?.role === 'ADMIN' || currentUser?.role === 'BU_HEAD' ? (
+                          <input
+                            type="number"
+                            min="0"
+                            step="100000"
+                            placeholder="設定目標..."
+                            defaultValue={row.targetAmt || ''}
+                            onBlur={e => handleUpdateTarget(row.periodKey, e.target.value)}
+                            className="w-28 text-right px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 font-mono text-slate-800 dark:text-slate-100"
+                          />
+                        ) : (
+                          <span className="font-mono text-slate-600 dark:text-slate-300">
+                            {row.targetAmt ? formatCompact(row.targetAmt) : '—'}
+                          </span>
+                        )}
                       </td>
                       <td className="py-2.5 px-3 text-right font-mono font-black">
                         {row.achievePct !== null ? (

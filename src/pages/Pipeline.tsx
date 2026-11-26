@@ -156,8 +156,9 @@ export const Pipeline: React.FC = () => {
   }, [selectedOppForDrawer, dataVersion]);
 
   const loadAmOpps = async (amId: string) => {
+    if (!currentUser) return;
     try {
-      const allOpps = await db.getOpportunities('ADMIN', '', {});
+      const allOpps = await db.getOpportunities(currentUser.role, currentUser.id, { userId: amId });
       setAmOpps(allOpps.filter(o => o.userId === amId));
     } catch (err) {
       console.error('Failed to load AM opportunities', err);

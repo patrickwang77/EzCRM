@@ -1,9 +1,10 @@
 import { Suspense, lazy, useEffect, useState } from 'react';
-import { AuthProvider } from './context/AuthContext';
+import { AuthProvider, useAuth } from './context/AuthContext';
 import { LayoutProvider } from './context/LayoutContext';
 import { FeedbackProvider } from './context/FeedbackContext';
 import { AppShell } from './components/AppShell';
 import { GlobalQuickCreateModal } from './components/GlobalQuickCreateModal';
+import { LoginScreen } from './components/LoginScreen';
 
 // Dynamic route-level code-splitting to keep initial bundle lean
 const Dashboard = lazy(() => import('./pages/Dashboard').then(m => ({ default: m.Dashboard })));
@@ -36,13 +37,30 @@ const PageLoader = () => (
 );
 
 function AppContent() {
+  const { authMode, authStatus, loading } = useAuth();
   const [activeTab, setActiveTab] = useState('dashboard');
 
   // Update SPA document title on view transitions
   useEffect(() => {
+    if (authMode === 'firebase' && authStatus !== 'authenticated') {
+      document.title = '登入 | EzCRM';
+      return;
+    }
     const label = TAB_TITLES[activeTab] || '分析儀表板';
-    document.title = `${label} | EZB2B CRM`;
-  }, [activeTab]);
+    document.title = `${label} | EzCRM`;
+  }, [activeTab, authMode, authStatus]);
+
+  if (authMode === 'firebase' && (loading || authStatus === 'loading')) {
+    return (
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex items-center justify-center">
+        <PageLoader />
+      </div>
+    );
+  }
+
+  if (authMode === 'firebase' && authStatus !== 'authenticated') {
+    return <LoginScreen />;
+  }
 
   const renderContent = () => {
     switch (activeTab) {

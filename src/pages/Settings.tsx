@@ -25,7 +25,7 @@ import {
 } from 'lucide-react';
 
 export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'system' }) => {
-  const { currentUser, availableUsers } = useAuth();
+  const { currentUser, availableUsers, authMode } = useAuth();
   const { dataVersion, bumpDataVersion, theme } = useLayout();
   const { notify, confirm } = useFeedback();
   const modalTitleId = useId();
@@ -417,7 +417,11 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
         <div className="pt-4 border-t border-slate-100 dark:border-slate-800">
           <div className={`flex items-center gap-2 justify-center text-xs font-semibold px-4 py-2.5 rounded-2xl border ${theme.accentSoftBg} ${theme.accentText} ${theme.accentBorder}`}>
             <ShieldAlert className="w-4 h-4" />
-            <span>提示：請使用右上角的角色選單切換為 ADMIN 管理員（{adminNames}）即可操作。</span>
+            <span>
+              {authMode === 'firebase'
+                ? `如需調整權限，請聯繫系統管理員（${adminNames}）。`
+                : `提示：請使用右上角的角色選單切換為 ADMIN 管理員（${adminNames}）即可操作。`}
+            </span>
           </div>
         </div>
       </div>
@@ -693,8 +697,15 @@ export const Settings: React.FC<{ mode?: 'system' | 'sales' }> = ({ mode = 'syst
       {/* --- Tab 3: 人員帳號管理 (Users CRUD) --- */}
       {activeTab === 'users' && (
         <div className="space-y-4">
-          <div className="flex justify-between items-center">
-            <p className="text-xs text-slate-400">建立與管理系統使用者的帳號權限。</p>
+          <div className="flex flex-wrap justify-between items-center gap-2">
+            <div className="space-y-0.5">
+              <p className="text-xs text-slate-400">建立與管理系統使用者的帳號權限。</p>
+              {authMode === 'firebase' && (
+                <p className="text-[11px] text-blue-600 dark:text-blue-400 font-semibold">
+                  雲端白名單模式：在此新增人員的 Google Email 後，該成員即可直接使用 Google 帳號登入並依角色與組織自動套用權限。
+                </p>
+              )}
+            </div>
             <button
               onClick={() => handleOpenModal('user')}
               className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 text-white font-bold text-xs rounded-xl shadow hover:bg-indigo-700 transition"

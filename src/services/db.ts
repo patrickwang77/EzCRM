@@ -1,5 +1,9 @@
-// B2B CRM Upgraded Mock Database Engine (LocalStorage-based)
+// EzCRM Dual-Mode Database Engine (Firebase Cloud Firestore or LocalStorage Fallback)
 import { formatLocalDate, getLocalTodayIso, parseLocalCalendarDate } from '../utils/dateUtils';
+import { isFirebaseConfigured } from './firebase';
+import { firestoreAdapter, setFirestoreSessionUser } from './firestoreAdapter';
+
+export const STORAGE_MODE: 'firebase' | 'local' = isFirebaseConfigured ? 'firebase' : 'local';
 
 export type UserRole = 'ADMIN' | 'BU_HEAD' | 'AM';
 
@@ -9,6 +13,9 @@ export interface User {
   email: string;
   role: UserRole;
   orgId: string | null; // 所屬組織 ID
+  authUid?: string;
+  photoURL?: string | null;
+  lastLoginAt?: string;
 }
 
 export interface Organization {
@@ -418,6 +425,9 @@ const notifyUsersChanged = () => {
 };
 
 export const generateId = (prefix: string): string => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `${prefix}-${crypto.randomUUID()}`;
+  }
   const rand = Math.random().toString(36).slice(2, 7);
   return `${prefix}-${Date.now()}-${rand}`;
 };
@@ -683,17 +693,16 @@ export const isActivityInMonthRange = (
   return true;
 };
 
-// 篩選商機的核心過濾函數 (支援 AM/BU_HEAD RBAC、組織樹、Sales Rep、客戶、月區間)
-const filterOpps = (
+// 篩選商機的核心純函數 (支援 AM/BU_HEAD RBAC、組織樹、Sales Rep、客戶、月區間)
+const applyOppFilters = (
   opps: Opportunity[],
+  orgs: Organization[],
+  users: User[],
+  stages: Stage[],
   role: UserRole,
   userId: string,
   filters?: QueryFilters
 ): Opportunity[] => {
-  const orgs = getFromStorage<Organization[]>(STORAGE_KEYS.ORGANIZATIONS, DEFAULT_ORGANIZATIONS);
-  const users = getFromStorage<User[]>(STORAGE_KEYS.USERS, DEFAULT_USERS);
-  const stages = getFromStorage<Stage[]>(STORAGE_KEYS.STAGES, DEFAULT_STAGES);
-
   let result = [...opps];
 
   // RBAC 預過濾：
@@ -744,14 +753,54 @@ const filterOpps = (
   return result;
 };
 
+const filterLocalOpps = (
+  opps: Opportunity[],
+  role: UserRole,
+  userId: string,
+  filters?: QueryFilters
+): Opportunity[] => {
+  const orgs = getFromStorage<Organization[]>(STORAGE_KEYS.ORGANIZATIONS, DEFAULT_ORGANIZATIONS);
+  const users = getFromStorage<User[]>(STORAGE_KEYS.USERS, DEFAULT_USERS);
+  const stages = getFromStorage<Stage[]>(STORAGE_KEYS.STAGES, DEFAULT_STAGES);
+  return applyOppFilters(opps, orgs, users, stages, role, userId, filters);
+};
+
 // DB API 實作
 export const db = {
+  setSessionUser: (user: User | null): void => {
+    setFirestoreSessionUser(user);
+  },
+
+  resolveAuthorizedUser: async (
+    email: string,
+    authUid: string,
+    photoURL?: string | null
+  ): Promise<User | null> => {
+    if (isFirebaseConfigured) {
+      return firestoreAdapter.resolveAuthorizedUser(email, authUid, photoURL);
+    }
+    initDB();
+    const users = getFromStorage<User[]>(STORAGE_KEYS.USERS, DEFAULT_USERS);
+    const normalized = email.trim().toLowerCase();
+    return users.find(u => u.email.trim().toLowerCase() === normalized) || null;
+  },
+
+  bootstrapCleanStartIfEmpty: async (): Promise<void> => {
+    if (isFirebaseConfigured) {
+      await firestoreAdapter.bootstrapCleanStartIfEmpty(DEFAULT_STAGES, DEFAULT_ACTIVITY_TYPES);
+      return;
+    }
+    initDB();
+  },
+
   // Organizations (樹狀結構 CRUD)
   getOrganizations: async (): Promise<Organization[]> => {
+    if (isFirebaseConfigured) return firestoreAdapter.getOrganizations();
     initDB();
     return getFromStorage<Organization[]>(STORAGE_KEYS.ORGANIZATIONS, DEFAULT_ORGANIZATIONS);
   },
   saveOrganization: async (org: Organization): Promise<Organization> => {
+    if (isFirebaseConfigured) return firestoreAdapter.saveOrganization(org);
     const list = getFromStorage<Organization[]>(STORAGE_KEYS.ORGANIZATIONS, DEFAULT_ORGANIZATIONS);
     // 防循環父子保護 (修復 B-3)
     if (org.parentId) {
@@ -773,6 +822,7 @@ export const db = {
     return org;
   },
   deleteOrganization: async (id: string): Promise<boolean> => {
+    if (isFirebaseConfigured) return firestoreAdapter.deleteOrganization(id);
     const list = getFromStorage<Organization[]>(STORAGE_KEYS.ORGANIZATIONS, DEFAULT_ORGANIZATIONS);
     const updated = list
       .map(o => (o.parentId === id ? { ...o, parentId: null } : o))
@@ -799,10 +849,12 @@ export const db = {
 
   // Users (CRUD)
   getUsers: async (): Promise<User[]> => {
+    if (isFirebaseConfigured) return firestoreAdapter.getUsers();
     initDB();
     return getFromStorage<User[]>(STORAGE_KEYS.USERS, DEFAULT_USERS);
   },
   saveUser: async (user: User): Promise<User> => {
+    if (isFirebaseConfigured) return firestoreAdapter.saveUser(user);
     const list = getFromStorage<User[]>(STORAGE_KEYS.USERS, DEFAULT_USERS);
     const idx = list.findIndex(u => u.id === user.id);
     if (idx >= 0) {
@@ -831,6 +883,7 @@ export const db = {
     return user;
   },
   deleteUser: async (id: string): Promise<boolean> => {
+    if (isFirebaseConfigured) return firestoreAdapter.deleteUser(id);
     const list = getFromStorage<User[]>(STORAGE_KEYS.USERS, DEFAULT_USERS);
     const target = list.find(u => u.id === id);
     if (!target) return false;
@@ -855,10 +908,12 @@ export const db = {
 
   // Companies (CRUD)
   getCompanies: async (): Promise<Company[]> => {
+    if (isFirebaseConfigured) return firestoreAdapter.getCompanies();
     initDB();
     return getFromStorage<Company[]>(STORAGE_KEYS.COMPANIES, DEFAULT_COMPANIES);
   },
   saveCompany: async (comp: Company): Promise<Company> => {
+    if (isFirebaseConfigured) return firestoreAdapter.saveCompany(comp);
     const list = getFromStorage<Company[]>(STORAGE_KEYS.COMPANIES, DEFAULT_COMPANIES);
     const idx = list.findIndex(c => c.id === comp.id);
     if (idx >= 0) {
@@ -870,6 +925,7 @@ export const db = {
     return comp;
   },
   deleteCompany: async (id: string): Promise<boolean> => {
+    if (isFirebaseConfigured) return firestoreAdapter.deleteCompany(id);
     const list = getFromStorage<Company[]>(STORAGE_KEYS.COMPANIES, DEFAULT_COMPANIES);
     const filtered = list.filter(c => c.id !== id);
     saveToStorage(STORAGE_KEYS.COMPANIES, filtered);
@@ -885,6 +941,7 @@ export const db = {
 
   // Contacts (CRUD)
   getContacts: async (companyId?: string): Promise<Contact[]> => {
+    if (isFirebaseConfigured) return firestoreAdapter.getContacts(companyId);
     initDB();
     const list = getFromStorage<Contact[]>(STORAGE_KEYS.CONTACTS, DEFAULT_CONTACTS);
     if (companyId) {
@@ -893,6 +950,7 @@ export const db = {
     return list;
   },
   saveContact: async (contact: Contact): Promise<Contact> => {
+    if (isFirebaseConfigured) return firestoreAdapter.saveContact(contact);
     const list = getFromStorage<Contact[]>(STORAGE_KEYS.CONTACTS, DEFAULT_CONTACTS);
     const idx = list.findIndex(c => c.id === contact.id);
     if (idx >= 0) {
@@ -904,6 +962,7 @@ export const db = {
     return contact;
   },
   deleteContact: async (id: string): Promise<boolean> => {
+    if (isFirebaseConfigured) return firestoreAdapter.deleteContact(id);
     const list = getFromStorage<Contact[]>(STORAGE_KEYS.CONTACTS, DEFAULT_CONTACTS);
     const filtered = list.filter(c => c.id !== id);
     saveToStorage(STORAGE_KEYS.CONTACTS, filtered);
@@ -912,6 +971,7 @@ export const db = {
 
   // Stages (CRUD with explicit outcome: 'OPEN' | 'WON' | 'LOST' & mandatory WON/LOST lock)
   getStages: async (onlyActive = false): Promise<Stage[]> => {
+    if (isFirebaseConfigured) return firestoreAdapter.getStages(onlyActive);
     initDB();
     let list = getFromStorage<Stage[]>(STORAGE_KEYS.STAGES, DEFAULT_STAGES);
     if (onlyActive) {
@@ -920,6 +980,7 @@ export const db = {
     return list.sort((a, b) => a.displayOrder - b.displayOrder);
   },
   saveStage: async (stage: Stage): Promise<Stage> => {
+    if (isFirebaseConfigured) return firestoreAdapter.saveStage(stage);
     const list = getFromStorage<Stage[]>(STORAGE_KEYS.STAGES, DEFAULT_STAGES);
     const existing = list.find(s => s.id === stage.id);
     const outcome: StageOutcome = existing?.outcome || stage.outcome || 'OPEN';
@@ -955,10 +1016,12 @@ export const db = {
     return enforced;
   },
   saveStages: async (stages: Stage[]): Promise<Stage[]> => {
+    if (isFirebaseConfigured) return firestoreAdapter.saveStages(stages);
     saveToStorage(STORAGE_KEYS.STAGES, stages);
     return stages;
   },
   deleteStage: async (id: string): Promise<boolean> => {
+    if (isFirebaseConfigured) return firestoreAdapter.deleteStage(id);
     const list = getFromStorage<Stage[]>(STORAGE_KEYS.STAGES, DEFAULT_STAGES);
     const target = list.find(s => s.id === id);
     if (!target) return false;
@@ -987,10 +1050,12 @@ export const db = {
 
   // Activity Types (CRUD)
   getActivityTypes: async (): Promise<ActivityTypeConfig[]> => {
+    if (isFirebaseConfigured) return firestoreAdapter.getActivityTypes();
     initDB();
     return getFromStorage<ActivityTypeConfig[]>(STORAGE_KEYS.ACTIVITY_TYPES, DEFAULT_ACTIVITY_TYPES);
   },
   saveActivityType: async (type: ActivityTypeConfig): Promise<ActivityTypeConfig> => {
+    if (isFirebaseConfigured) return firestoreAdapter.saveActivityType(type);
     const list = getFromStorage<ActivityTypeConfig[]>(STORAGE_KEYS.ACTIVITY_TYPES, DEFAULT_ACTIVITY_TYPES);
     const idx = list.findIndex(t => t.id === type.id);
     if (idx >= 0) {
@@ -1002,6 +1067,7 @@ export const db = {
     return type;
   },
   deleteActivityType: async (id: string): Promise<boolean> => {
+    if (isFirebaseConfigured) return firestoreAdapter.deleteActivityType(id);
     const list = getFromStorage<ActivityTypeConfig[]>(STORAGE_KEYS.ACTIVITY_TYPES, DEFAULT_ACTIVITY_TYPES);
     const filtered = list.filter(t => t.id !== id);
     saveToStorage(STORAGE_KEYS.ACTIVITY_TYPES, filtered);
@@ -1014,16 +1080,27 @@ export const db = {
     userId: string,
     filters?: QueryFilters
   ): Promise<Opportunity[]> => {
+    if (isFirebaseConfigured) {
+      const [opps, orgs, users, stages] = await Promise.all([
+        firestoreAdapter.getRawOpportunities(),
+        firestoreAdapter.getOrganizations(),
+        firestoreAdapter.getUsers(),
+        firestoreAdapter.getStages(false),
+      ]);
+      return applyOppFilters(opps, orgs, users, stages, role, userId, filters);
+    }
     initDB();
     const list = getFromStorage<Opportunity[]>(STORAGE_KEYS.OPPORTUNITIES, DEFAULT_OPPORTUNITIES);
-    return filterOpps(list, role, userId, filters);
+    return filterLocalOpps(list, role, userId, filters);
   },
   getOpportunityById: async (id: string): Promise<Opportunity | undefined> => {
+    if (isFirebaseConfigured) return firestoreAdapter.getOpportunityById(id);
     initDB();
     const list = getFromStorage<Opportunity[]>(STORAGE_KEYS.OPPORTUNITIES, DEFAULT_OPPORTUNITIES);
     return list.find(o => o.id === id);
   },
   saveOpportunity: async (opp: Opportunity): Promise<Opportunity> => {
+    if (isFirebaseConfigured) return firestoreAdapter.saveOpportunity(opp);
     const list = getFromStorage<Opportunity[]>(STORAGE_KEYS.OPPORTUNITIES, DEFAULT_OPPORTUNITIES);
     const users = getFromStorage<User[]>(STORAGE_KEYS.USERS, DEFAULT_USERS);
     const stages = getFromStorage<Stage[]>(STORAGE_KEYS.STAGES, DEFAULT_STAGES)
@@ -1071,6 +1148,7 @@ export const db = {
     return opp;
   },
   deleteOpportunity: async (id: string): Promise<boolean> => {
+    if (isFirebaseConfigured) return firestoreAdapter.deleteOpportunity(id);
     const list = getFromStorage<Opportunity[]>(STORAGE_KEYS.OPPORTUNITIES, DEFAULT_OPPORTUNITIES);
     const filtered = list.filter(o => o.id !== id);
     saveToStorage(STORAGE_KEYS.OPPORTUNITIES, filtered);
@@ -1082,6 +1160,7 @@ export const db = {
 
   // Activities & Tasks (With Slicers)
   getActivities: async (opportunityId?: string): Promise<Activity[]> => {
+    if (isFirebaseConfigured) return firestoreAdapter.getActivities(opportunityId);
     initDB();
     const list = getFromStorage<Activity[]>(STORAGE_KEYS.ACTIVITIES, DEFAULT_ACTIVITIES);
     if (opportunityId) {
@@ -1094,19 +1173,21 @@ export const db = {
     role: UserRole,
     filters?: QueryFilters
   ): Promise<Activity[]> => {
-    initDB();
-    const list = getFromStorage<Activity[]>(STORAGE_KEYS.ACTIVITIES, DEFAULT_ACTIVITIES);
-    const opps = getFromStorage<Opportunity[]>(STORAGE_KEYS.OPPORTUNITIES, DEFAULT_OPPORTUNITIES);
-    const filteredOppIds = filterOpps(opps, role, userId, filters).map(o => o.id);
+    const [opps, list] = await Promise.all([
+      db.getOpportunities(role, userId, filters),
+      db.getActivities(),
+    ]);
+    const filteredOppIds = new Set(opps.map(o => o.id));
     const tasks = list.filter(
       a =>
         a.isCompleted === false &&
-        filteredOppIds.includes(a.opportunityId) &&
+        filteredOppIds.has(a.opportunityId) &&
         isActivityInMonthRange(a, filters?.startMonth, filters?.endMonth)
     );
     return tasks.sort((a, b) => a.dueDate.localeCompare(b.dueDate));
   },
   saveActivity: async (act: Activity): Promise<Activity> => {
+    if (isFirebaseConfigured) return firestoreAdapter.saveActivity(act);
     const list = getFromStorage<Activity[]>(STORAGE_KEYS.ACTIVITIES, DEFAULT_ACTIVITIES);
     const idx = list.findIndex(a => a.id === act.id);
     if (idx >= 0) {
@@ -1118,6 +1199,7 @@ export const db = {
     return act;
   },
   deleteActivity: async (id: string): Promise<boolean> => {
+    if (isFirebaseConfigured) return firestoreAdapter.deleteActivity(id);
     const list = getFromStorage<Activity[]>(STORAGE_KEYS.ACTIVITIES, DEFAULT_ACTIVITIES);
     const filtered = list.filter(a => a.id !== id);
     saveToStorage(STORAGE_KEYS.ACTIVITIES, filtered);
@@ -1130,9 +1212,10 @@ export const db = {
     userId: string,
     filters?: QueryFilters
   ): Promise<{ stageName: string; amount: number; count: number }[]> => {
-    initDB();
-    const opps = await db.getOpportunities(role, userId, filters);
-    const stages = await db.getStages(true);
+    const [opps, stages] = await Promise.all([
+      db.getOpportunities(role, userId, filters),
+      db.getStages(true),
+    ]);
 
     return stages.map(stage => {
       const stageOpps = opps.filter(o => o.stageId === stage.id);
@@ -1169,11 +1252,12 @@ export const db = {
     taskCompletionRate: number;
     funnelConversion: number;
   }> => {
-    initDB();
-    const opps = await db.getOpportunities(role, userId, filters);
+    const [opps, allActivities, stages] = await Promise.all([
+      db.getOpportunities(role, userId, filters),
+      db.getActivities(),
+      db.getStages(false),
+    ]);
     const oppIds = new Set(opps.map(o => o.id));
-    const allActivities = getFromStorage<Activity[]>(STORAGE_KEYS.ACTIVITIES, DEFAULT_ACTIVITIES);
-    const stages = getFromStorage<Stage[]>(STORAGE_KEYS.STAGES, DEFAULT_STAGES);
 
     const stageMap = new Map(stages.map(s => [s.id, s]));
     const getOutcome = (stageId: string): StageOutcome => stageMap.get(stageId)?.outcome || 'OPEN';
@@ -1240,10 +1324,12 @@ export const db = {
 
   // Sales Targets (Monthly Goals for Management Metrics)
   getSalesTargets: async (): Promise<SalesTarget[]> => {
+    if (isFirebaseConfigured) return firestoreAdapter.getSalesTargets();
     initDB();
     return getFromStorage<SalesTarget[]>(STORAGE_KEYS.SALES_TARGETS, []);
   },
   saveSalesTarget: async (target: SalesTarget): Promise<SalesTarget> => {
+    if (isFirebaseConfigured) return firestoreAdapter.saveSalesTarget(target);
     const list = getFromStorage<SalesTarget[]>(STORAGE_KEYS.SALES_TARGETS, []);
     const idx = list.findIndex(t => t.month === target.month);
     if (idx >= 0) {
@@ -1257,10 +1343,12 @@ export const db = {
 
   // Product Lines APIs
   getProductLines: async (): Promise<ProductLine[]> => {
+    if (isFirebaseConfigured) return firestoreAdapter.getProductLines();
     initDB();
     return getFromStorage<ProductLine[]>(STORAGE_KEYS.PRODUCT_LINES, DEFAULT_PRODUCT_LINES);
   },
   saveProductLine: async (item: ProductLine): Promise<ProductLine> => {
+    if (isFirebaseConfigured) return firestoreAdapter.saveProductLine(item);
     const list = getFromStorage<ProductLine[]>(STORAGE_KEYS.PRODUCT_LINES, DEFAULT_PRODUCT_LINES);
     const idx = list.findIndex(p => p.id === item.id);
     if (idx >= 0) {
@@ -1272,6 +1360,7 @@ export const db = {
     return item;
   },
   deleteProductLine: async (id: string): Promise<boolean> => {
+    if (isFirebaseConfigured) return firestoreAdapter.deleteProductLine(id);
     const list = getFromStorage<ProductLine[]>(STORAGE_KEYS.PRODUCT_LINES, DEFAULT_PRODUCT_LINES);
     const filtered = list.filter(p => p.id !== id);
     saveToStorage(STORAGE_KEYS.PRODUCT_LINES, filtered);
@@ -1280,10 +1369,12 @@ export const db = {
 
   // Budget Items Config APIs
   getBudgetItems: async (): Promise<BudgetItemConfig[]> => {
+    if (isFirebaseConfigured) return firestoreAdapter.getBudgetItems();
     initDB();
     return getFromStorage<BudgetItemConfig[]>(STORAGE_KEYS.BUDGET_ITEMS, DEFAULT_BUDGET_ITEMS);
   },
   saveBudgetItem: async (item: BudgetItemConfig): Promise<BudgetItemConfig> => {
+    if (isFirebaseConfigured) return firestoreAdapter.saveBudgetItem(item);
     const list = getFromStorage<BudgetItemConfig[]>(STORAGE_KEYS.BUDGET_ITEMS, DEFAULT_BUDGET_ITEMS);
     const idx = list.findIndex(b => b.id === item.id);
     if (idx >= 0) {
@@ -1295,6 +1386,7 @@ export const db = {
     return item;
   },
   deleteBudgetItem: async (id: string): Promise<boolean> => {
+    if (isFirebaseConfigured) return firestoreAdapter.deleteBudgetItem(id);
     const list = getFromStorage<BudgetItemConfig[]>(STORAGE_KEYS.BUDGET_ITEMS, DEFAULT_BUDGET_ITEMS);
     const filtered = list.filter(b => b.id !== id);
     saveToStorage(STORAGE_KEYS.BUDGET_ITEMS, filtered);

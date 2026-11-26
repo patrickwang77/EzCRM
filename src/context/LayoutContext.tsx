@@ -66,6 +66,7 @@ export const VARIANT_THEMES: Record<LayoutVariant, VariantTheme> = {
 interface LayoutContextValue {
   variant: LayoutVariant;
   setVariant: (v: LayoutVariant) => void;
+  showVariantSwitcher: boolean;
   theme: VariantTheme;
   isQuickCreateOpen: boolean;
   quickCreateTab: QuickCreateTab;
@@ -81,13 +82,21 @@ interface LayoutContextValue {
 
 const LayoutContext = createContext<LayoutContextValue | null>(null);
 
+const resolveEnvVariant = (): LayoutVariant => {
+  const envDefault = import.meta.env.VITE_DEFAULT_VARIANT;
+  if (envDefault === 'A' || envDefault === 'B' || envDefault === 'C') return envDefault;
+  return 'A';
+};
+
 export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const showVariantSwitcher = import.meta.env.VITE_SHOW_VARIANT_SWITCHER === 'true';
+  const defaultVariant = resolveEnvVariant();
+
   const [variant, setVariantState] = useState<LayoutVariant>(() => {
+    if (!showVariantSwitcher) return defaultVariant;
     const saved = localStorage.getItem('crm_layout_variant');
     if (saved === 'A' || saved === 'B' || saved === 'C') return saved;
-    const envDefault = import.meta.env.VITE_DEFAULT_VARIANT;
-    if (envDefault === 'A' || envDefault === 'B' || envDefault === 'C') return envDefault;
-    return 'A';
+    return defaultVariant;
   });
 
   const [isQuickCreateOpen, setIsQuickCreateOpen] = useState(false);
@@ -97,6 +106,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [isCopilotOpen, setIsCopilotOpen] = useState(true);
 
   const setVariant = (v: LayoutVariant) => {
+    if (!showVariantSwitcher) return;
     setVariantState(v);
     localStorage.setItem('crm_layout_variant', v);
   };
@@ -126,6 +136,7 @@ export const LayoutProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       value={{
         variant,
         setVariant,
+        showVariantSwitcher,
         theme: VARIANT_THEMES[variant],
         isQuickCreateOpen,
         quickCreateTab,
